@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PYTHON_VERSION: "3.11"
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: dhanada_test
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ./backend[dev]
+
+      - name: Run ruff (lint)
+        run: cd backend && make lint
+
+      - name: Run ruff (format check)
+        run: cd backend && make format-check
+
+      - name: Run mypy
+        run: cd backend && make typecheck
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ./backend[dev]
+
+      - name: Run bandit
+        run: cd backend && python -m bandit -r src -ll
+
+      - name: Run pip-audit
+        run: cd backend && pip-audit
+
+      - name: Run detect-secrets
+        run: cd backend && detect-secrets scan --all-files
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        ports: [5432:5432]
+        options: >-
+          --health-cmd="pg_isready -U ${{ env.POSTGRES_USER }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ./backend[dev]
+
+      - name: Wait for PostgreSQL
+        run: |
+          sleep 5
+          pg_isready -h localhost -p 5432 -U ${{ env.POSTGRES_USER }}
+
+      - name: Run migrations
+        run: |
+          cd backend
+          DATABASE_URL="postgresql+asyncpg://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}" \
+          python -m alembic upgrade head
+
+      - name: Run tests
+        run: cd backend && make test
+        env:
+          DATABASE_URL: "postgresql+asyncpg://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}"
+          DHANADA_AUTH_JWT_SECRET_KEY: "test-secret-key-for-ci-only-32-chars-long!!"
+          DHANADA_AUTH_KEK_BASE64: "dGVzdC1rZXktZW5jcnlwdGlvbi1rZXktMzItYnl0ZXMtdmVyeS1zZWNyZXQ="
+          DHANADA_AUTH_TOTP_ISSUER: "Dhanada Test"
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./backend/coverage.xml
+          flags: unittests
+
+  migrate-check:
+    name: Migration Check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        ports: [5432:5432]
+        options: >-
+          --health-cmd="pg_isready -U ${{ env.POSTGRES_USER }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ./backend[dev]
+
+      - name: Wait for PostgreSQL
+        run: |
+          sleep 5
+          pg_isready -h localhost -p 5432 -U ${{ env.POSTGRES_USER }}
+
+      - name: Check migration generates clean SQL
+        run: |
+          cd backend
+          DATABASE_URL="postgresql+asyncpg://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}" \
+          python -m alembic upgrade head
+          python -m alembic revision --autogenerate -m "test_migration_check"
+          python -m alembic downgrade -1
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, security, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build dependencies
+        run: pip install build
+
+      - name: Build package
+        run: cd backend && python -m build . --wheel --no-isolation
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: backend/dist/
