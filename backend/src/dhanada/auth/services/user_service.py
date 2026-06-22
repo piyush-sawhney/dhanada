@@ -29,21 +29,9 @@ class UserService:
         username: str,
         password: str,
         full_name: str | None = None,
+        created_by_id: uuid.UUID | None = None,
     ) -> User:
-        """Register a new user.
-
-        Args:
-            email: User email (must be unique).
-            username: Username (must be unique).
-            password: Plain-text password (will be hashed with Argon2id).
-            full_name: Optional full display name.
-
-        Returns:
-            Created User instance.
-
-        Raises:
-            UserAlreadyExistsError: Email or username already taken.
-        """
+        """Register a new user."""
         existing_email = await self._user_repo.get_by_email(email)
         if existing_email is not None:
             raise UserAlreadyExistsError(
@@ -64,6 +52,43 @@ class UserService:
             username=username,
             password_hash=password_hash,
             full_name=full_name,
+            created_by_id=created_by_id,
+        )
+        return user
+
+    async def register_superuser(
+        self,
+        email: str,
+        username: str,
+        password: str,
+        full_name: str | None = None,
+    ) -> User:
+        """Register the first superuser.
+
+        Same as register() but sets is_superuser=True.
+        Caller is responsible for checking that no users exist.
+        """
+        existing_email = await self._user_repo.get_by_email(email)
+        if existing_email is not None:
+            raise UserAlreadyExistsError(
+                f"Email '{email}' is already registered",
+                hint="Use a different email",
+            )
+
+        existing_username = await self._user_repo.get_by_username(username)
+        if existing_username is not None:
+            raise UserAlreadyExistsError(
+                f"Username '{username}' is already taken",
+                hint="Choose a different username",
+            )
+
+        password_hash = self._password_manager.hash_password(password)
+        user = await self._user_repo.create(
+            email=email,
+            username=username,
+            password_hash=password_hash,
+            full_name=full_name,
+            is_superuser=True,
         )
         return user
 
@@ -72,20 +97,9 @@ class UserService:
         email: str,
         password: str,
     ) -> User:
-        """Authenticate a user with email and password.
-
-        Args:
-            email: User email.
-            password: Plain-text password.
-
-        Returns:
-            Authenticated User instance.
-
-        Raises:
-            InvalidCredentialsError: Invalid email or password.
-        """
+        """Authenticate a user with email and password."""
         user = await self._user_repo.get_by_email(email)
-        if user is None:
+        if user is None or user.deleted_at is not None:
             raise InvalidCredentialsError(
                 "Invalid email or password",
                 hint="Check your credentials or register a new account",
@@ -123,17 +137,9 @@ class UserService:
         user_id: uuid.UUID,
         old_password: str,
         new_password: str,
+        updated_by_id: uuid.UUID | None = None,
     ) -> User:
-        """Change a user's password.
-
-        Args:
-            user_id: User UUID.
-            old_password: Current password for verification.
-            new_password: New password.
-
-        Returns:
-            Updated User instance.
-        """
+        """Change a user's password."""
         user = await self.get_by_id(user_id)
         if not self._password_manager.verify_password(old_password, user.password_hash):
             raise InvalidCredentialsError(
@@ -141,19 +147,22 @@ class UserService:
                 hint="Enter your current password correctly",
             )
         new_hash = self._password_manager.hash_password(new_password)
-        updated = await self._user_repo.update(user_id, password_hash=new_hash)
+        updated = await self._user_repo.update(
+            user_id, password_hash=new_hash, updated_by_id=updated_by_id,
+        )
         return updated
 
     async def update_profile(
         self,
         user_id: uuid.UUID,
         full_name: str | None = None,
+        updated_by_id: uuid.UUID | None = None,
     ) -> User:
         """Update user profile information."""
         updates: dict = {}
         if full_name is not None:
             updates["full_name"] = full_name
-        updated = await self._user_repo.update(user_id, **updates)
+        updated = await self._user_repo.update(user_id, updated_by_id=updated_by_id, **updates)
         if updated is None:
             raise UserNotFoundError(f"User {user_id} not found")
         return updated
@@ -161,3 +170,33 @@ class UserService:
     async def update_last_login(self, user_id: uuid.UUID) -> None:
         """Update last login timestamp."""
         await self._user_repo.update_last_login(user_id)
+
+    async def activate_user(
+        self,
+        user_id: uuid.UUID,
+        updated_by_id: uuid.UUID | None = None,
+    ) -> User:
+        """Activate a user account (set is_active=True)."""
+        user = await self._user_repo.update(
+            user_id, is_active=True, updated_by_id=updated_by_id,
+        )
+        if user is None:
+            raise UserNotFoundError(f"User {user_id} not found")
+        return user
+
+    async def set_password(
+        self,
+        user_id: uuid.UUID,
+        password: str,
+        updated_by_id: uuid.UUID | None = None,
+    ) -> User:
+        """Set a user's password without verifying the old one.
+
+        Used during first-time setup and admin-forced password reset.
+        """
+        user = await self.get_by_id(user_id)
+        new_hash = self._password_manager.hash_password(password)
+        updated = await self._user_repo.update(
+            user_id, password_hash=new_hash, updated_by_id=updated_by_id,
+        )
+        return updated

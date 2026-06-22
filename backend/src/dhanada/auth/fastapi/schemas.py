@@ -38,7 +38,7 @@ class ChangePasswordRequest(BaseModel):
 class TOTPEnableResponse(BaseModel):
     secret: str
     provisioning_uri: str
-    backup_codes: list[str]
+    backup_codes: list[str] | None = None
 
 
 class TOTPVerifyRequest(BaseModel):
@@ -78,6 +78,62 @@ class PermissionCheckResponse(BaseModel):
     action: str
 
 
+class BootstrapRequest(BaseModel):
+    email: EmailStr
+    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: str | None = Field(None, max_length=200)
+
+
+class BootstrapStatusResponse(BaseModel):
+    needs_bootstrap: bool
+
+
 class ErrorResponse(BaseModel):
     detail: str
     hint: str | None = None
+
+
+class AdminCreateUserRequest(BaseModel):
+    email: EmailStr
+    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
+    full_name: str | None = Field(None, max_length=200)
+    role_name: str | None = Field(None, min_length=1, max_length=50)
+
+
+class UserCreatedResponse(BaseModel):
+    id: UUID
+    email: str
+    username: str
+    full_name: str | None
+    is_active: bool = False
+    is_superuser: bool = False
+    temporary_password: str
+    roles: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class BootstrapCompleteResponse(BaseModel):
+    user: UserResponse
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = 900
+    totp_required: bool = True
+
+
+class SetupRequiredResponse(BaseModel):
+    status: str = "setup_required"
+    setup_token: str
+    expires_in: int = 900
+
+
+class SetupCompleteRequest(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class AdminResetUserAuthResponse(BaseModel):
+    temporary_password: str

@@ -70,9 +70,17 @@ class Client(CRMBaseModel):
         ForeignKey("auth.users.id", ondelete="CASCADE"),
         nullable=False,
     )
+    updated_by_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     created_by: Mapped["User"] = relationship(
         "User", foreign_keys=[created_by_id], lazy="selectin",
+    )
+    updated_by: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[updated_by_id], lazy="selectin",
     )
     deleted_by: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[deleted_by_id], lazy="selectin",
@@ -157,8 +165,16 @@ class Document(CRMBaseModel):
         ForeignKey("auth.users.id", ondelete="CASCADE"),
         nullable=False,
     )
+    updated_by_id: Mapped[Optional[UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_by: Mapped["User"] = relationship(
         "User", foreign_keys=[created_by_id], lazy="selectin",
+    )
+    updated_by: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[updated_by_id], lazy="selectin",
     )
     deleted_by: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[deleted_by_id], lazy="selectin",

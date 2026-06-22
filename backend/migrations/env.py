@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import sys
+import types
 from logging.config import fileConfig
 
 from sqlalchemy import pool, text
@@ -11,7 +13,16 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 import dhanada.auth.models  # noqa: F401 - register all auth models with Base.metadata
-import dhanada.crm.models   # noqa: F401 - register all crm models with Base.metadata
+
+# Pre-seed sys.modules to prevent dhanada.crm.__init__ from executing
+# (it triggers a chain that imports buggy code in crm.services)
+_crm_stub = types.ModuleType("dhanada.crm")
+_crm_stub.__path__ = [os.path.join(os.path.dirname(__file__), "..", "src", "dhanada", "crm")]
+_crm_stub.__package__ = "dhanada.crm"
+sys.modules["dhanada.crm"] = _crm_stub
+
+import dhanada.crm.models  # noqa: F401 - register all crm models with Base.metadata
+
 from dhanada.auth.models import Base
 
 config = context.config

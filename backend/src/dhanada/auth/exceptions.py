@@ -69,3 +69,7 @@ class EncryptionError(AuthError):
 
 class ConfigurationError(AuthError):
     """Configuration error."""
+
+
+class SuperuserAlreadyExistsError(AuthError):
+    """Superuser already exists - bootstrap not allowed."""

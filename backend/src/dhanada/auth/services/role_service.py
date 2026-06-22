@@ -2,7 +2,6 @@
 
 import uuid
 from dataclasses import dataclass
-from typing import List
 
 from dhanada.auth.db.repository import RoleRepository, UserRepository
 from dhanada.auth.exceptions import (
@@ -31,16 +30,11 @@ class RoleService:
         self._role_repo = role_repo
         self._user_repo = user_repo
 
-    async def assign_role(self, user_id: uuid.UUID, role_name: str) -> bool:
-        """Assign a role to a user.
-
-        Args:
-            user_id: User UUID.
-            role_name: Role name (e.g., "admin", "editor").
-
-        Returns:
-            True if assignment succeeded.
-        """
+    async def assign_role(
+        self, user_id: uuid.UUID, role_name: str,
+        created_by_id: uuid.UUID | None = None,
+    ) -> bool:
+        """Assign a role to a user."""
         user = await self._user_repo.get(user_id)
         if user is None:
             raise UserNotFoundError(f"User {user_id} not found")
@@ -49,7 +43,9 @@ class RoleService:
         if role is None:
             return False
 
-        return await self._role_repo.assign_role_to_user(user_id, role.id)
+        return await self._role_repo.assign_role_to_user(
+            user_id, role.id, created_by_id=created_by_id,
+        )
 
     async def revoke_role(self, user_id: uuid.UUID, role_name: str) -> bool:
         """Revoke a role from a user."""
@@ -63,7 +59,7 @@ class RoleService:
 
         return await self._role_repo.remove_role_from_user(user_id, role.id)
 
-    async def get_user_roles(self, user_id: uuid.UUID) -> List[str]:
+    async def get_user_roles(self, user_id: uuid.UUID) -> list[str]:
         """Get all role names for a user."""
         roles = await self._role_repo.get_user_roles(user_id)
         return [role.name for role in roles]
@@ -85,7 +81,7 @@ class RoleService:
             PermissionCheck result.
         """
         user = await self._user_repo.get(user_id)
-        if user is None:
+        if user is None or user.deleted_at is not None:
             raise UserNotFoundError(f"User {user_id} not found")
 
         if user.is_superuser:
@@ -136,6 +132,6 @@ class RoleService:
         )
         return True
 
-    async def get_user_permissions(self, user_id: uuid.UUID) -> List[str]:
+    async def get_user_permissions(self, user_id: uuid.UUID) -> list[str]:
         """Get all permission strings for a user."""
         return await self._role_repo.get_permissions(user_id)

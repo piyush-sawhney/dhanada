@@ -166,3 +166,94 @@ async def require_superuser(
             detail="Superuser access required",
         )
     return user
+
+
+async def require_setup_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    auth: AuthManager = Depends(get_auth_manager),
+) -> User:
+    """Dependency that validates a setup token and returns the user.
+
+    Setup tokens are short-lived JWTs (15 min) with type='setup'.
+    Used during first-time login flow and admin-forced resets.
+    """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        payload = auth._jwt.verify_setup_token(credentials.credentials)
+        user = await auth.get_user(UUID(payload.sub))
+        return user
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Setup token has expired. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid setup token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except AuthenticationError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed",
+        )
+
+
+async def get_setup_or_active_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    auth: AuthManager = Depends(get_auth_manager),
+) -> User:
+    """Dependency that accepts either a setup token or a regular JWT.
+
+    Tries setup token first (for inactive users during first-time flow),
+    then falls back to regular authentication (for active users).
+    """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Try setup token first
+    try:
+        payload = auth._jwt.verify_setup_token(credentials.credentials)
+        return await auth.get_user(UUID(payload.sub))
+    except (InvalidTokenError, TokenExpiredError, AuthenticationError):
+        pass
+
+    # Fall back to regular access token
+    try:
+        payload = auth._jwt.verify_access_token(credentials.credentials)
+        user = await auth.get_user(UUID(payload.sub))
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is inactive",
+            )
+        return user
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except AuthenticationError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed",
+        )

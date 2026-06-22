@@ -170,6 +170,49 @@ class JWTManager:
             family_id=payload["family_id"],
         )
 
+    def create_setup_token(self, user_id: uuid.UUID) -> str:
+        """Create a short-lived setup token for first-time login flow.
+
+        Args:
+            user_id: User UUID.
+
+        Returns:
+            Signed JWT setup token string (15 min expiry).
+        """
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": str(user_id),
+            "exp": now + timedelta(minutes=15),
+            "iat": now,
+            "jti": str(uuid.uuid4()),
+            "type": "setup",
+        }
+        return jwt.encode(payload, self._secret_key, algorithm=self._algorithm)
+
+    def verify_setup_token(self, token: str) -> TokenPayload:
+        """Verify and decode a setup token.
+
+        Args:
+            token: JWT setup token string.
+
+        Returns:
+            TokenPayload with decoded claims.
+
+        Raises:
+            TokenExpiredError: Token has expired.
+            InvalidTokenError: Token is malformed, signature invalid, or wrong type.
+        """
+        payload = self._decode_token(token)
+        if payload.get("type") != "setup":
+            raise InvalidTokenError("Token is not a setup token")
+        return TokenPayload(
+            sub=payload["sub"],
+            exp=payload["exp"],
+            iat=payload["iat"],
+            jti=payload["jti"],
+            type=payload["type"],
+        )
+
     def _decode_token(self, token: str) -> dict[str, Any]:
         """Decode and validate a JWT token.
 

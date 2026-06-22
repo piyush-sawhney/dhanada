@@ -2,44 +2,52 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.exceptions import (
     AuthenticationError,
     InvalidTokenError,
-    PermissionDeniedError,
+    SuperuserAlreadyExistsError,
+    TokenExpiredError,
     TOTPAlreadyEnabledError,
     TOTPError,
     TOTPInvalidTokenError,
     TOTPNotEnabledError,
-    TokenExpiredError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from dhanada.auth.models.user import User
 from dhanada.auth.fastapi.dependencies import (
     get_auth_manager,
     get_current_user,
+    get_setup_or_active_user,
     require_permission,
+    require_setup_token,
     require_superuser,
 )
 from dhanada.auth.fastapi.schemas import (
+    AdminCreateUserRequest,
+    AdminResetUserAuthResponse,
     AssignRoleRequest,
+    BootstrapCompleteResponse,
+    BootstrapRequest,
+    BootstrapStatusResponse,
     ChangePasswordRequest,
     ErrorResponse,
     LoginRequest,
     PermissionCheckResponse,
     ProfileUpdateRequest,
     RefreshRequest,
-    RegisterRequest,
+    SetupCompleteRequest,
+    SetupRequiredResponse,
     TOTPDisableRequest,
     TOTPEnableResponse,
     TOTPVerifyRequest,
     TokenResponse,
+    UserCreatedResponse,
     UserResponse,
 )
-from dhanada.auth.models.user import User
-
 auth_router = APIRouter(tags=["auth"])
 
 
@@ -53,41 +61,115 @@ def _get_client_info(request: Request) -> tuple[str | None, str | None]:
 
 @auth_router.post(
     "/register",
-    response_model=UserResponse,
+    response_model=UserCreatedResponse,
     status_code=status.HTTP_201_CREATED,
     responses={409: {"model": ErrorResponse}},
 )
 async def register(
-    body: RegisterRequest,
+    body: AdminCreateUserRequest,
+    user: User = Depends(get_current_user),
+    _=Depends(require_permission("users", "create")),
     auth: AuthManager = Depends(get_auth_manager),
-) -> UserResponse:
-    """Register a new user."""
+) -> UserCreatedResponse:
+    """Register a new user. Requires users:create permission.
+
+    Creates the user as inactive with a system-generated temporary password.
+    The user must complete TOTP setup and password change on first login.
+    Optionally assigns a role that becomes active after user activation.
+    """
     try:
-        user = await auth.register_user(
+        temp_password = auth.generate_temp_password()
+        new_user = await auth.register_user(
             email=body.email,
             username=body.username,
-            password=body.password,
+            password=temp_password,
             full_name=body.full_name,
+            current_user_id=user.id,
+            is_active=False,
         )
-        return UserResponse(
-            id=user.id,
-            email=user.email,
-            username=user.username,
-            full_name=user.full_name,
-            is_active=user.is_active,
-            is_superuser=user.is_superuser,
-            email_verified=user.email_verified,
-            roles=[r.name for r in user.roles],
-            created_at=user.created_at,
-            updated_at=user.updated_at,
+
+        if body.role_name:
+            await auth.assign_role(new_user.id, body.role_name, current_user_id=user.id)
+
+        return UserCreatedResponse(
+            id=new_user.id,
+            email=new_user.email,
+            username=new_user.username,
+            full_name=new_user.full_name,
+            is_active=False,
+            is_superuser=new_user.is_superuser,
+            temporary_password=temp_password,
+            roles=[r.name for r in new_user.roles],
+            created_at=new_user.created_at,
+            updated_at=new_user.updated_at,
         )
     except UserAlreadyExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 @auth_router.post(
+    "/bootstrap",
+    response_model=BootstrapCompleteResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": ErrorResponse}},
+)
+async def bootstrap(
+    body: BootstrapRequest,
+    request: Request,
+    auth: AuthManager = Depends(get_auth_manager),
+) -> BootstrapCompleteResponse:
+    """Register the first superuser. Only works when no users exist.
+
+    Returns auto-login tokens so the UI can immediately proceed to TOTP setup.
+    """
+    try:
+        user = await auth.create_superuser(
+            email=body.email,
+            username=body.username,
+            password=body.password,
+            full_name=body.full_name,
+        )
+        user_agent, ip_address = _get_client_info(request)
+        tokens = await auth._create_tokens(user, user_agent, ip_address)
+        return BootstrapCompleteResponse(
+            user=UserResponse(
+                id=user.id,
+                email=user.email,
+                username=user.username,
+                full_name=user.full_name,
+                is_active=user.is_active,
+                is_superuser=user.is_superuser,
+                email_verified=user.email_verified,
+                roles=[r.name for r in user.roles],
+                created_at=user.created_at,
+                updated_at=user.updated_at,
+            ),
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token,
+            token_type=tokens.token_type,
+            expires_in=tokens.expires_in,
+            totp_required=True,
+        )
+    except SuperuserAlreadyExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except UserAlreadyExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@auth_router.get(
+    "/bootstrap/status",
+    response_model=BootstrapStatusResponse,
+)
+async def bootstrap_status(
+    auth: AuthManager = Depends(get_auth_manager),
+) -> BootstrapStatusResponse:
+    """Check if the system needs bootstrapping (no users exist)."""
+    return BootstrapStatusResponse(needs_bootstrap=not await auth.has_users())
+
+
+@auth_router.post(
     "/login",
-    response_model=TokenResponse,
+    response_model=TokenResponse | SetupRequiredResponse,
     responses={
         401: {"model": ErrorResponse},
         403: {"model": ErrorResponse},
@@ -97,27 +179,80 @@ async def login(
     body: LoginRequest,
     request: Request,
     auth: AuthManager = Depends(get_auth_manager),
-) -> TokenResponse:
-    """Login with email and password, optionally with TOTP."""
+) -> TokenResponse | SetupRequiredResponse:
+    """Login with email and password.
+
+    Flow:
+    1. If user is inactive → returns a 15-minute setup token for TOTP enrollment + activation.
+    2. If user is active but TOTP not enabled → returns a setup token (bootstrap case).
+    3. If user is active with TOTP → requires valid TOTP code, returns JWT tokens.
+    """
     try:
         user_agent, ip_address = _get_client_info(request)
-        result = await auth.authenticate(
-            email=body.email,
-            password=body.password,
-            totp_token=body.totp_token,
-            user_agent=user_agent,
-            ip_address=ip_address,
-        )
+        user = await auth.verify_credentials(body.email, body.password)
+
+        # Setup flow for inactive users or users without TOTP
+        if not user.is_active or not await auth.totp_is_enabled(user.id):
+            setup_token = auth.generate_setup_token(user.id)
+            return SetupRequiredResponse(setup_token=setup_token)
+
+        # Normal login — TOTP is mandatory
+        if body.totp_token is None or not await auth.verify_totp(user.id, body.totp_token):
+            raise TOTPInvalidTokenError(
+                "TOTP code required",
+                hint="Provide your authenticator app code to complete login",
+            )
+
+        tokens = await auth._create_tokens(user, user_agent, ip_address)
         return TokenResponse(
-            access_token=result.access_token,
-            refresh_token=result.refresh_token,
-            token_type=result.token_type,
-            expires_in=result.expires_in,
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token,
+            token_type=tokens.token_type,
+            expires_in=tokens.expires_in,
         )
     except AuthenticationError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
-    except (TOTPNotEnabledError, TOTPInvalidTokenError) as e:
+    except TOTPInvalidTokenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@auth_router.post(
+    "/setup-complete",
+    response_model=TokenResponse,
+    responses={
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    },
+)
+async def setup_complete(
+    body: SetupCompleteRequest,
+    request: Request,
+    setup_user: User = Depends(require_setup_token),
+    auth: AuthManager = Depends(get_auth_manager),
+) -> TokenResponse:
+    """Complete first-time setup: set password, activate account, issue tokens.
+
+    Requires a valid setup token (obtained from /login when setup is needed).
+    The user must have already verified TOTP before calling this endpoint.
+
+    For already-active users (e.g., bootstrap superuser after token expiry),
+    the password is NOT changed and the account remains active — only
+    new tokens are issued.
+    """
+    user_agent, ip_address = _get_client_info(request)
+    tokens = await auth.complete_setup(
+        user_id=setup_user.id,
+        new_password=body.new_password,
+        current_user_id=setup_user.id,
+        user_agent=user_agent,
+        ip_address=ip_address,
+    )
+    return TokenResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        token_type=tokens.token_type,
+        expires_in=tokens.expires_in,
+    )
 
 
 @auth_router.post(
@@ -200,7 +335,9 @@ async def update_me(
     auth: AuthManager = Depends(get_auth_manager),
 ) -> UserResponse:
     """Update current user profile."""
-    updated = await auth.update_profile(user.id, full_name=body.full_name)
+    updated = await auth.update_profile(
+        user.id, full_name=body.full_name, current_user_id=user.id,
+    )
     return UserResponse(
         id=updated.id,
         email=updated.email,
@@ -227,7 +364,10 @@ async def change_password(
 ) -> None:
     """Change current user's password."""
     try:
-        await auth.change_password(user.id, body.old_password, body.new_password)
+        await auth.change_password(
+            user.id, body.old_password, body.new_password,
+            current_user_id=user.id,
+        )
     except AuthenticationError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 
@@ -238,12 +378,18 @@ async def change_password(
     responses={409: {"model": ErrorResponse}},
 )
 async def enable_totp(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_setup_or_active_user),
     auth: AuthManager = Depends(get_auth_manager),
 ) -> TOTPEnableResponse:
-    """Enable TOTP two-factor authentication."""
+    """Enable TOTP two-factor authentication.
+
+    Works with both a regular JWT (active user, generates backup codes)
+    and a setup token (first-time flow, no backup codes).
+    """
     try:
-        result = await auth.enable_totp(user.id)
+        # Inactive user = setup flow = no backup codes
+        generate_codes = user.is_active
+        result = await auth.enable_totp(user.id, generate_backup_codes=generate_codes)
         return TOTPEnableResponse(
             secret=result.secret,
             provisioning_uri=result.provisioning_uri,
@@ -259,10 +405,13 @@ async def enable_totp(
 )
 async def verify_totp(
     body: TOTPVerifyRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_setup_or_active_user),
     auth: AuthManager = Depends(get_auth_manager),
 ) -> dict:
-    """Verify and confirm TOTP enrollment."""
+    """Verify and confirm TOTP enrollment.
+
+    Works with both a regular JWT (active user) and a setup token (first-time flow).
+    """
     try:
         verified = await auth.verify_and_confirm_totp(user.id, body.token)
         return {"verified": verified}
@@ -308,11 +457,14 @@ async def generate_backup_codes(
 async def assign_role(
     user_id: UUID,
     body: AssignRoleRequest,
+    user: User = Depends(get_current_user),
     _=Depends(require_permission("roles", "assign")),
     auth: AuthManager = Depends(get_auth_manager),
 ) -> dict:
     """Assign a role to a user. Requires roles:assign permission."""
-    assigned = await auth.assign_role(user_id, body.role_name)
+    assigned = await auth.assign_role(
+        user_id, body.role_name, current_user_id=user.id,
+    )
     return {"assigned": assigned}
 
 
@@ -384,5 +536,30 @@ async def get_user(
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
+    except UserNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+
+@auth_router.post(
+    "/admin/users/{user_id}/reset-auth",
+    response_model=AdminResetUserAuthResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def admin_reset_user_auth(
+    user_id: UUID,
+    user: User = Depends(require_superuser),
+    auth: AuthManager = Depends(get_auth_manager),
+) -> AdminResetUserAuthResponse:
+    """Admin force-reset a user's authentication.
+
+    Requires superuser.
+    Disables TOTP, sets the user inactive, and generates a new temporary password.
+    The user must go through the first-time login flow again.
+    """
+    try:
+        temp_password = await auth.reset_user_auth(
+            user_id=user_id, current_user_id=user.id,
+        )
+        return AdminResetUserAuthResponse(temporary_password=temp_password)
     except UserNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

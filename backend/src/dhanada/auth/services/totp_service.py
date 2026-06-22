@@ -23,7 +23,7 @@ class TOTPEnrollmentResult:
 
     secret: str
     provisioning_uri: str
-    backup_codes: List[str]
+    backup_codes: List[str] | None = None
 
 
 @dataclass
@@ -47,14 +47,17 @@ class TOTPService:
         self._user_repo = user_repo
         self._totp_manager = totp_manager
 
-    async def enable(self, user_id: uuid.UUID) -> TOTPEnrollmentResult:
+    async def enable(
+        self, user_id: uuid.UUID, generate_backup_codes: bool = True,
+    ) -> TOTPEnrollmentResult:
         """Enable TOTP for a user.
 
         Args:
             user_id: User UUID.
+            generate_backup_codes: Whether to generate backup codes.
 
         Returns:
-            TOTPEnrollmentResult with secret, QR URI, and backup codes.
+            TOTPEnrollmentResult with secret, QR URI, and optional backup codes.
 
         Raises:
             TOTPAlreadyEnabledError: TOTP already enabled.
@@ -72,11 +75,14 @@ class TOTPService:
 
         secret = self._totp_manager.generate_secret()
         enrollment = self._totp_manager.enroll(secret, user.email)
-        backup_codes = self._totp_manager.generate_backup_codes()
-        hashed_backup_codes = [
-            hashlib.sha256(code.encode()).hexdigest()
-            for code in backup_codes
-        ]
+        backup_codes = None
+        hashed_backup_codes: list[str] = []
+        if generate_backup_codes:
+            backup_codes = self._totp_manager.generate_backup_codes()
+            hashed_backup_codes = [
+                hashlib.sha256(code.encode()).hexdigest()
+                for code in backup_codes
+            ]
 
         await self._totp_repo.upsert(
             user_id=user_id,
