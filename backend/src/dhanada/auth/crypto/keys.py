@@ -27,7 +27,10 @@ class KEKManager:
         except Exception as e:
             raise ConfigurationError(
                 "Invalid KEK: must be valid base64",
-                hint="Generate with: python -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'",
+                hint=(
+                    "Generate with: python -c 'import base64, os; "
+                    "print(base64.b64encode(os.urandom(32)).decode())'"
+                ),
             ) from e
 
         if len(kek) != KEK_SIZE:

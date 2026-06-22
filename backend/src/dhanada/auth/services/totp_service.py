@@ -1,11 +1,9 @@
 """TOTP two-factor authentication service."""
 
 import hashlib
-import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 from dhanada.auth.auth.totp import TOTPManager
 from dhanada.auth.db.repository import TOTPRepository, UserRepository
@@ -23,7 +21,7 @@ class TOTPEnrollmentResult:
 
     secret: str
     provisioning_uri: str
-    backup_codes: List[str] | None = None
+    backup_codes: list[str] | None = None
 
 
 @dataclass
@@ -48,7 +46,9 @@ class TOTPService:
         self._totp_manager = totp_manager
 
     async def enable(
-        self, user_id: uuid.UUID, generate_backup_codes: bool = True,
+        self,
+        user_id: uuid.UUID,
+        generate_backup_codes: bool = True,
     ) -> TOTPEnrollmentResult:
         """Enable TOTP for a user.
 
@@ -80,8 +80,7 @@ class TOTPService:
         if generate_backup_codes:
             backup_codes = self._totp_manager.generate_backup_codes()
             hashed_backup_codes = [
-                hashlib.sha256(code.encode()).hexdigest()
-                for code in backup_codes
+                hashlib.sha256(code.encode()).hexdigest() for code in backup_codes
             ]
 
         await self._totp_repo.upsert(
@@ -128,13 +127,14 @@ class TOTPService:
                     await self._totp_repo.update(
                         totp.id,
                         is_verified=True,
-                        verified_at=datetime.now(timezone.utc),
+                        verified_at=datetime.now(UTC),
                         backup_codes=remaining,
                     )
                     return True
 
         # Verify TOTP token
         from dhanada.auth.crypto.envelope import EncryptedPayload
+
         secret = self._totp_manager.decrypt_secret(
             EncryptedPayload.from_components(
                 ciphertext=totp.encrypted_secret,
@@ -147,7 +147,7 @@ class TOTPService:
             await self._totp_repo.update(
                 totp.id,
                 is_verified=True,
-                verified_at=datetime.now(timezone.utc),
+                verified_at=datetime.now(UTC),
             )
             return True
 
@@ -187,6 +187,7 @@ class TOTPService:
 
         # Verify TOTP token
         from dhanada.auth.crypto.envelope import EncryptedPayload
+
         secret = self._totp_manager.decrypt_secret(
             EncryptedPayload.from_components(
                 ciphertext=totp.encrypted_secret,
@@ -215,17 +216,14 @@ class TOTPService:
         await self._totp_repo.delete(totp.id)
         return True
 
-    async def generate_backup_codes(self, user_id: uuid.UUID) -> List[str]:
+    async def generate_backup_codes(self, user_id: uuid.UUID) -> list[str]:
         """Generate new backup codes, invalidating old ones."""
         totp = await self._totp_repo.get_by_user_id(user_id)
         if totp is None:
             raise TOTPNotEnabledError("TOTP is not enabled")
 
         backup_codes = self._totp_manager.generate_backup_codes()
-        hashed_codes = [
-            hashlib.sha256(code.encode()).hexdigest()
-            for code in backup_codes
-        ]
+        hashed_codes = [hashlib.sha256(code.encode()).hexdigest() for code in backup_codes]
 
         await self._totp_repo.update(totp.id, backup_codes=hashed_codes)
         return backup_codes
@@ -234,5 +232,3 @@ class TOTPService:
         """Check if TOTP is enabled for a user."""
         totp = await self._totp_repo.get_by_user_id(user_id)
         return totp is not None and totp.is_verified
-
-

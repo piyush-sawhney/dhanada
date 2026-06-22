@@ -16,7 +16,7 @@ class AuthConfig(BaseSettings):
 
     # Database
     database_url: PostgresDsn = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada",
+        default="postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada",  # type: ignore[assignment]
         description="PostgreSQL connection URL",
     )
 
@@ -24,6 +24,11 @@ class AuthConfig(BaseSettings):
     jwt_secret_key: str = Field(
         description="Secret key for JWT signing (min 32 chars)",
         min_length=32,
+    )
+    jwt_key_id: str = Field(default="current", description="Key ID for the current JWT signing key")
+    jwt_previous_secret_keys: list[str] = Field(
+        default_factory=list,
+        description="List of previous secret keys for token verification during rotation",
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     jwt_access_token_expire_minutes: int = Field(
@@ -34,9 +39,7 @@ class AuthConfig(BaseSettings):
     )
 
     # Envelope Encryption - Key Encryption Key (KEK)
-    kek_base64: str = Field(
-        description="Base64-encoded 32-byte KEK for envelope encryption"
-    )
+    kek_base64: str = Field(description="Base64-encoded 32-byte KEK for envelope encryption")
 
     # TOTP Configuration
     totp_issuer: str = Field(default="Dhanada", description="TOTP issuer name")
@@ -45,8 +48,27 @@ class AuthConfig(BaseSettings):
     # Password Hashing
     bcrypt_rounds: int = Field(default=12, description="Bcrypt rounds")
 
+    # Account Lockout
+    account_lockout_threshold: int = Field(
+        default=5, description="Failed login attempts before lockout"
+    )
+    account_lockout_minutes: int = Field(default=15, description="Lockout duration in minutes")
+
     # Session
     session_token_bytes: int = Field(default=32, description="Session token entropy")
+
+    # Email / ZeptoMail
+    zeptomail_api_key: str = Field(
+        description="ZeptoMail API token (SEND_MAIL_TOKEN)",
+    )
+    zeptomail_from_email: str = Field(
+        default="noreply@dhanada.app",
+        description="Verified sender email address in ZeptoMail",
+    )
+    email_verification_token_ttl_minutes: int = Field(
+        default=1440,
+        description="Email verification token TTL (24h)",
+    )
 
     # Application
     environment: str = Field(default="development", description="Environment name")

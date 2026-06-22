@@ -4,9 +4,9 @@ import os
 
 import pytest
 
-from dhanada.auth.crypto.envelope import EnvelopeEncryption, EncryptedPayload
+from dhanada.auth.crypto.envelope import EncryptedPayload, EnvelopeEncryption
 from dhanada.auth.crypto.keys import KEKManager
-from dhanada.auth.exceptions import EncryptionError
+from dhanada.auth.exceptions import ConfigurationError, EncryptionError
 
 
 class TestKEKManager:
@@ -25,14 +25,15 @@ class TestKEKManager:
 
     def test_from_env_invalid_not_base64(self):
         """Loading KEK from invalid base64 should raise."""
-        with pytest.raises(Exception):
+        with pytest.raises(ConfigurationError):
             KEKManager.from_env("not-valid-base64!!")
 
     def test_from_env_wrong_length(self):
         """Loading KEK with wrong decoded length should raise."""
         import base64
+
         short = base64.b64encode(os.urandom(16)).decode()
-        with pytest.raises(Exception):
+        with pytest.raises(ConfigurationError):
             KEKManager.from_env(short)
 
 

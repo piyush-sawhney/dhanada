@@ -62,13 +62,17 @@ class AuditMixin:
     @declared_attr
     def created_by(cls) -> Mapped[Optional["User"]]:
         return relationship(
-            "User", foreign_keys=[cls.created_by_id], lazy="selectin",
+            "User",
+            foreign_keys=[cls.created_by_id],  # type: ignore[list-item]
+            lazy="selectin",
         )
 
     @declared_attr
     def updated_by(cls) -> Mapped[Optional["User"]]:
         return relationship(
-            "User", foreign_keys=[cls.updated_by_id], lazy="selectin",
+            "User",
+            foreign_keys=[cls.updated_by_id],  # type: ignore[list-item]
+            lazy="selectin",
         )
 
 

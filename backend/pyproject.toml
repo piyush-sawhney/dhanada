@@ -35,6 +35,8 @@ dependencies = [
     "uvicorn>=0.30.0",
     "python-multipart>=0.0.9",
     "email-validator>=2.1.0",
+    "slowapi>=0.1.9",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -46,7 +48,6 @@ dev = [
     "mypy>=1.10.0",
     "pre-commit>=3.7.0",
     "faker>=25.0.0",
-    "httpx>=0.27.0",
     "testcontainers>=4.10.0",
     "bandit>=1.7.0",
     "detect-secrets>=1.5.0",
@@ -60,9 +61,11 @@ include = ["dhanada*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "PTH", "SIM", "T20", "S"]
 ignore = ["S101", "S311"]
-src = ["src", "tests"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -70,7 +73,7 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.12"
-disallow_untyped_defs = true
+strict = true
 warn_return_any = true
 warn_unused_ignores = true
 strict_optional = true

@@ -1,9 +1,5 @@
 """Tests for password hashing."""
 
-import pytest
-
-from dhanada.auth.auth.passwords import PasswordManager
-
 
 class TestPasswordManager:
     def test_hash_password_returns_string(self, password_manager):
@@ -19,7 +15,7 @@ class TestPasswordManager:
 
     def test_verify_correct_password(self, password_manager):
         """Correct password should verify against its hash."""
-        password = "SecurePass123!"
+        password = "SecurePass123!"  # noqa: S105
         hashed = password_manager.hash_password(password)
         assert password_manager.verify_password(password, hashed) is True
 
@@ -64,17 +60,16 @@ class TestPasswordManager:
 
     def test_hash_unicode_password(self, password_manager):
         """Unicode passwords should be handled."""
-        unicode_pass = "Pässwörd_123_日本語"
+        unicode_pass = "Pässwörd_123_日本語"  # noqa: S105
         hashed = password_manager.hash_password(unicode_pass)
         assert password_manager.verify_password(unicode_pass, hashed) is True
 
     def test_unicode_mismatch(self, password_manager):
         """Unicode-normalization differences should be handled."""
-        password = "café"
+        password = "café"  # noqa: S105
         # Some users might NFC, some NFD - this test is just documenting behavior
         hashed = password_manager.hash_password(password)
         # NFC form
         import unicodedata
-        assert password_manager.verify_password(
-            unicodedata.normalize("NFC", password), hashed
-        )
+
+        assert password_manager.verify_password(unicodedata.normalize("NFC", password), hashed)

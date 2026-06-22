@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
     password: str = Field(..., min_length=8, max_length=128)
     full_name: str | None = Field(None, max_length=200)
 
@@ -22,7 +22,7 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105
     expires_in: int = 900
 
 
@@ -66,6 +66,8 @@ class UserResponse(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     full_name: str | None = Field(None, max_length=200)
+    email: EmailStr | None = None
+    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
 
 
 class AssignRoleRequest(BaseModel):
@@ -80,7 +82,7 @@ class PermissionCheckResponse(BaseModel):
 
 class BootstrapRequest(BaseModel):
     email: EmailStr
-    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
     password: str = Field(..., min_length=8, max_length=128)
     full_name: str | None = Field(None, max_length=200)
 
@@ -96,7 +98,7 @@ class ErrorResponse(BaseModel):
 
 class AdminCreateUserRequest(BaseModel):
     email: EmailStr
-    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
+    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
     full_name: str | None = Field(None, max_length=200)
     role_name: str | None = Field(None, min_length=1, max_length=50)
 
@@ -120,7 +122,7 @@ class BootstrapCompleteResponse(BaseModel):
     user: UserResponse
     access_token: str
     refresh_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105
     expires_in: int = 900
     totp_required: bool = True
 
@@ -137,3 +139,74 @@ class SetupCompleteRequest(BaseModel):
 
 class AdminResetUserAuthResponse(BaseModel):
     temporary_password: str
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class VerifyEmailResponse(BaseModel):
+    verified: bool
+    email: str | None = None
+
+
+class SendVerificationRequest(BaseModel):
+    email: str | None = None
+
+
+class SendVerificationResponse(BaseModel):
+    sent: bool
+    message: str = "If the email exists, a verification email has been sent."
+
+
+class UserListResponse(BaseModel):
+    users: list[UserResponse]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminUpdateUserRequest(BaseModel):
+    email: EmailStr | None = None
+    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
+    full_name: str | None = Field(None, max_length=200)
+    is_active: bool | None = None
+
+
+class UserDeleteResponse(BaseModel):
+    deleted: bool
+
+
+class RolePermissionResponse(BaseModel):
+    resource: str
+    action: str
+
+
+class RoleResponse(BaseModel):
+    id: UUID
+    name: str
+    description: str | None
+    is_system: bool
+    permissions: list[RolePermissionResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RoleListResponse(BaseModel):
+    roles: list[RoleResponse]
+
+
+class CreateRoleRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    description: str | None = Field(None, max_length=500)
+
+
+class RevokeRoleRequest(BaseModel):
+    role_name: str = Field(..., min_length=1, max_length=50)
+
+
+class AddPermissionRequest(BaseModel):
+    resource: str = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., min_length=1, max_length=50)

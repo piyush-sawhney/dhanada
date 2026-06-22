@@ -1,7 +1,6 @@
 """Tests for CRM model — PAN validation and normalization."""
 
-import pytest
-from dhanada.crm.models import validate_pan, normalize_pan
+from dhanada.crm.models import normalize_pan, validate_pan
 
 
 class TestPANValidation:

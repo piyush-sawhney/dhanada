@@ -8,6 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dhanada.auth.db.session import DatabaseSession
+from dhanada.auth.exceptions import UserNotFoundError
 from dhanada.crm.services import ClientService, DocumentService
 
 
@@ -144,21 +145,25 @@ class TestDocumentService:
 
     async def test_get_nonexistent_raises(self, svc_doc, test_user):
         """Getting a non-existent document should raise."""
-        with pytest.raises(Exception):
+        with pytest.raises(UserNotFoundError):
             await svc_doc.get(test_user.id, uuid.uuid4())
 
     async def test_list_documents(self, svc_doc, svc_client, test_user):
         """Listing returns all active documents."""
         client = await self._create_client(svc_client, test_user)
         await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
         )
         await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="aadhaar", issue_date=date(2024, 2, 1),
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="aadhaar",
+            issue_date=date(2024, 2, 1),
         )
-        docs = await svc_doc.list(test_user.id)
+        docs = await svc_doc.list_all(test_user.id)
         assert len(docs) >= 2
 
     async def test_list_filter_by_client(self, svc_doc, svc_client, test_user):
@@ -166,14 +171,18 @@ class TestDocumentService:
         client1 = await self._create_client(svc_client, test_user, name="Client A")
         client2 = await self._create_client(svc_client, test_user, name="Client B")
         await svc_doc.create(
-            user_id=test_user.id, client_id=client1.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
+            user_id=test_user.id,
+            client_id=client1.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
         )
         await svc_doc.create(
-            user_id=test_user.id, client_id=client2.id,
-            document_type="aadhaar", issue_date=date(2024, 2, 1),
+            user_id=test_user.id,
+            client_id=client2.id,
+            document_type="aadhaar",
+            issue_date=date(2024, 2, 1),
         )
-        docs = await svc_doc.list(test_user.id, client_id=client1.id)
+        docs = await svc_doc.list_all(test_user.id, client_id=client1.id)
         assert len(docs) == 1
         assert docs[0].client_id == client1.id
 
@@ -181,14 +190,18 @@ class TestDocumentService:
         """List can filter by document_type."""
         client = await self._create_client(svc_client, test_user)
         await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
         )
         await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="passport", issue_date=date(2024, 2, 1),
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="passport",
+            issue_date=date(2024, 2, 1),
         )
-        docs = await svc_doc.list(test_user.id, document_type="passport")
+        docs = await svc_doc.list_all(test_user.id, document_type="passport")
         assert len(docs) == 1
         assert docs[0].document_type == "passport"
 
@@ -277,13 +290,17 @@ class TestDocumentService:
         """Updating to an existing document number should raise."""
         client = await self._create_client(svc_client, test_user)
         await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", document_number="EXISTING",
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            document_number="EXISTING",
             issue_date=date(2024, 1, 1),
         )
         doc2 = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="aadhaar", document_number="OTHER",
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="aadhaar",
+            document_number="OTHER",
             issue_date=date(2024, 2, 1),
         )
         with pytest.raises(ValueError, match="already exists"):
@@ -300,7 +317,7 @@ class TestDocumentService:
         )
         result = await svc_doc.soft_delete(test_user.id, doc.id)
         assert result is True
-        with pytest.raises(Exception):
+        with pytest.raises(UserNotFoundError):
             await svc_doc.get(test_user.id, doc.id)
 
     async def test_soft_delete_nonexistent(self, svc_doc, test_user):
@@ -312,24 +329,31 @@ class TestDocumentService:
         """List should exclude soft-deleted documents by default."""
         client = await self._create_client(svc_client, test_user)
         doc = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
         )
         await svc_doc.soft_delete(test_user.id, doc.id)
-        docs = await svc_doc.list(test_user.id)
+        docs = await svc_doc.list_all(test_user.id)
         assert doc.id not in [d.id for d in docs]
 
     async def test_has_front_photo_flag(self, svc_doc, svc_client, test_user):
         """Response metadata indicates presence of front photo."""
         client = await self._create_client(svc_client, test_user)
         doc_with = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
-            front_photo=b"test", front_photo_mime="image/jpeg",
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
+            front_photo=b"test",
+            front_photo_mime="image/jpeg",
         )
         doc_without = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="aadhaar", issue_date=date(2024, 2, 1),
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="aadhaar",
+            issue_date=date(2024, 2, 1),
         )
         assert doc_with.front_photo_data is not None
         assert doc_without.front_photo_data is None
@@ -337,18 +361,25 @@ class TestDocumentService:
     async def test_batch_photos_returns_all(self, svc_doc, svc_client, test_user):
         """Batch returns front and back photos as base64 for all docs."""
         import base64
+
         front_orig = b"front_bytes_for_batch"
         back_orig = b"back_bytes_for_batch"
         client = await self._create_client(svc_client, test_user)
         doc1 = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
-            front_photo=front_orig, front_photo_mime="image/jpeg",
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
+            front_photo=front_orig,
+            front_photo_mime="image/jpeg",
         )
         doc2 = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="passport", issue_date=date(2024, 2, 1),
-            back_photo=back_orig, back_photo_mime="image/png",
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="passport",
+            issue_date=date(2024, 2, 1),
+            back_photo=back_orig,
+            back_photo_mime="image/png",
         )
         entries = await svc_doc.get_photos_batch(test_user.id, [doc1.id, doc2.id])
         assert len(entries) == 2
@@ -367,9 +398,12 @@ class TestDocumentService:
         """Soft-deleted documents are excluded from batch results."""
         client = await self._create_client(svc_client, test_user)
         doc = await svc_doc.create(
-            user_id=test_user.id, client_id=client.id,
-            document_type="pan_card", issue_date=date(2024, 1, 1),
-            front_photo=b"test", front_photo_mime="image/jpeg",
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
+            front_photo=b"test",
+            front_photo_mime="image/jpeg",
         )
         await svc_doc.soft_delete(test_user.id, doc.id)
         entries = await svc_doc.get_photos_batch(test_user.id, [doc.id])

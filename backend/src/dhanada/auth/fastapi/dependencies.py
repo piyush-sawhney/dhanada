@@ -26,17 +26,16 @@ Usage in FastAPI app::
         ...
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.config import AuthConfig
 from dhanada.auth.exceptions import (
     AuthenticationError,
-    AuthorizationError,
     InvalidTokenError,
     PermissionDeniedError,
     TokenExpiredError,
@@ -60,8 +59,8 @@ async def get_auth_manager() -> AsyncGenerator[AuthManager, None]:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    auth: AuthManager = Depends(get_auth_manager),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> User:
     """Dependency that extracts and validates the current user from JWT.
 
@@ -88,21 +87,21 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except AuthenticationError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",
-        )
+        ) from None
 
 
-def require_permission(resource: str, action: str):
+def require_permission(resource: str, action: str) -> Callable[[], Awaitable[None]]:
     """Dependency factory that requires a specific permission.
 
     Usage::
@@ -115,8 +114,8 @@ def require_permission(resource: str, action: str):
     """
 
     async def permission_checker(
-        user: User = Depends(get_current_user),
-        auth: AuthManager = Depends(get_auth_manager),
+        user: User = Depends(get_current_user),  # noqa: B008
+        auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
     ) -> None:
         try:
             await auth.check_permission(user.id, resource, action)
@@ -124,12 +123,12 @@ def require_permission(resource: str, action: str):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=str(e),
-            )
+            ) from None
 
     return permission_checker
 
 
-def require_roles(*roles: str):
+def require_roles(*roles: str) -> Callable[[], Awaitable[None]]:
     """Dependency factory that requires specific roles.
 
     Usage::
@@ -142,8 +141,8 @@ def require_roles(*roles: str):
     """
 
     async def role_checker(
-        user: User = Depends(get_current_user),
-        auth: AuthManager = Depends(get_auth_manager),
+        user: User = Depends(get_current_user),  # noqa: B008
+        auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
     ) -> None:
         user_roles = await auth.get_user_roles(user.id)
         for role in roles:
@@ -157,7 +156,7 @@ def require_roles(*roles: str):
 
 
 async def require_superuser(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),  # noqa: B008
 ) -> User:
     """Dependency that requires a superuser."""
     if not user.is_superuser:
@@ -169,8 +168,8 @@ async def require_superuser(
 
 
 async def require_setup_token(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    auth: AuthManager = Depends(get_auth_manager),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> User:
     """Dependency that validates a setup token and returns the user.
 
@@ -193,23 +192,23 @@ async def require_setup_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Setup token has expired. Please log in again.",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid setup token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except AuthenticationError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",
-        )
+        ) from None
 
 
 async def get_setup_or_active_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    auth: AuthManager = Depends(get_auth_manager),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> User:
     """Dependency that accepts either a setup token or a regular JWT.
 
@@ -245,15 +244,15 @@ async def get_setup_or_active_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except AuthenticationError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",
-        )
+        ) from None

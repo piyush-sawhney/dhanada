@@ -6,8 +6,7 @@ from dataclasses import dataclass
 import pyotp
 
 from dhanada.auth.constants import BACKUP_CODE_COUNT, BACKUP_CODE_LENGTH
-from dhanada.auth.crypto.envelope import EnvelopeEncryption, EncryptedPayload
-from dhanada.auth.exceptions import EncryptionError
+from dhanada.auth.crypto.envelope import EncryptedPayload, EnvelopeEncryption
 
 
 @dataclass

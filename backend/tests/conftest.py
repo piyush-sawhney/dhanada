@@ -21,20 +21,21 @@ from dhanada.auth.db.session import DatabaseSession
 from dhanada.auth.models import Base
 from dhanada.auth.models.user import User
 from dhanada.crm.services import ClientService, DocumentService
-from dhanada.crm.models import Client
+
 
 # Test configuration constants
+def _generate_test_kek():
+    mgr, b64 = KEKManager.generate()
+    return b64, mgr
+
+
 TEST_DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada_test",
 )
 
-TEST_JWT_SECRET = "test-secret-key-for-unit-tests-min-32-char!"
+TEST_JWT_SECRET = "test-secret-key-for-unit-tests-min-32-char!"  # noqa: S105
 TEST_KEK_BASE64, TEST_KEK_MANAGER = _generate_test_kek()
-
-def _generate_test_kek():
-    mgr, b64 = KEKManager.generate()
-    return b64, mgr
 
 
 @pytest.fixture(scope="session")
@@ -133,16 +134,17 @@ async def test_user(auth_manager: AuthManager) -> User:
     user = await auth_manager.register_user(
         email="services.test@example.com",
         username="servicestest",
-        password="ServiceTest123!",
+        password="ServiceTest123!",  # noqa: S106
         full_name="Service Test User",
     )
     return user
 
 
 @pytest_asyncio.fixture
-async def client_service(auth_manager: AuthManager, test_user: User) -> ClientService:
+async def client_service(auth_manager: AuthManager, _test_user: User) -> ClientService:
     """Create a ClientService with its own DB session."""
     from dhanada.auth.db.session import DatabaseSession
+
     db = DatabaseSession(str(auth_manager.config.database_url))
     async with db.session() as session:
         yield ClientService(
@@ -153,9 +155,10 @@ async def client_service(auth_manager: AuthManager, test_user: User) -> ClientSe
 
 
 @pytest_asyncio.fixture
-async def document_service(auth_manager: AuthManager, test_user: User) -> DocumentService:
+async def document_service(auth_manager: AuthManager, _test_user: User) -> DocumentService:
     """Create a DocumentService with its own DB session."""
     from dhanada.auth.db.session import DatabaseSession
+
     db = DatabaseSession(str(auth_manager.config.database_url))
     async with db.session() as session:
         yield DocumentService(
@@ -168,5 +171,5 @@ async def document_service(auth_manager: AuthManager, test_user: User) -> Docume
 # Shared test data
 TEST_USER_EMAIL = "test@example.com"
 TEST_USER_USERNAME = "testuser"
-TEST_USER_PASSWORD = "SecurePassword123!"
+TEST_USER_PASSWORD = "SecurePassword123!"  # noqa: S105
 TEST_USER_FULL_NAME = "Test User"

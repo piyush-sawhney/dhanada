@@ -4,9 +4,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.ext.associationproxy import AssociationProxy, association_proxy
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dhanada.auth.models.base import BaseModel
@@ -57,9 +57,25 @@ class User(BaseModel):
         default=False,
         nullable=False,
     )
+    failed_login_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     last_login: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+    # Expiry for inactive accounts (auto-cleanup after 24h)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Auto-expiry for inactive accounts waiting first-time setup",
     )
 
     # Soft-delete fields
@@ -80,7 +96,7 @@ class User(BaseModel):
         lazy="selectin",
         cascade="all, delete-orphan",
     )
-    roles: list["Role"] = association_proxy("user_role_links", "role")
+    roles: AssociationProxy[list["Role"]] = association_proxy("user_role_links", "role")
 
     deleted_by: Mapped[Optional["User"]] = relationship(
         "User",

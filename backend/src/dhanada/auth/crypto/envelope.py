@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from dhanada.auth.constants import AES_GCM_NONCE_SIZE, AES_GCM_TAG_SIZE, DEK_SIZE
+from dhanada.auth.constants import AES_GCM_NONCE_SIZE, DEK_SIZE
 from dhanada.auth.crypto.keys import KEKManager
 from dhanada.auth.exceptions import EncryptionError
 
@@ -43,7 +43,9 @@ class EncryptedPayload:
     """DEK encrypted with KEK (ciphertext + 16-byte tag concatenated)."""
 
     @classmethod
-    def from_components(cls, ciphertext: bytes, nonce: bytes, encrypted_dek: bytes) -> "EncryptedPayload":
+    def from_components(
+        cls, ciphertext: bytes, nonce: bytes, encrypted_dek: bytes
+    ) -> "EncryptedPayload":
         """Reconstruct an EncryptedPayload from stored components."""
         return cls(
             ciphertext=ciphertext,

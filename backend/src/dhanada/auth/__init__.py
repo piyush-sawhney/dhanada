@@ -3,27 +3,27 @@
 from dhanada.auth.api import AuthManager
 from dhanada.auth.config import AuthConfig
 from dhanada.auth.exceptions import (
-    AuthError,
     AuthenticationError,
+    AuthError,
     AuthorizationError,
-    InvalidTokenError,
-    TokenExpiredError,
-    UserNotFoundError,
-    UserAlreadyExistsError,
+    CannotDeleteSystemRoleError,
     InvalidCredentialsError,
+    InvalidTokenError,
+    PermissionDeniedError,
+    TokenExpiredError,
+    TOTPAlreadyEnabledError,
     TOTPError,
     TOTPInvalidTokenError,
-    TOTPAlreadyEnabledError,
     TOTPNotEnabledError,
-    PermissionDeniedError,
+    UserAlreadyExistsError,
+    UserNotFoundError,
 )
-
 from dhanada.auth.models import (
-    User,
+    RefreshToken,
     Role,
     RolePermission,
     TOTPSecret,
-    RefreshToken,
+    User,
 )
 
 __all__ = [
@@ -32,6 +32,7 @@ __all__ = [
     "AuthError",
     "AuthenticationError",
     "AuthorizationError",
+    "CannotDeleteSystemRoleError",
     "InvalidTokenError",
     "TokenExpiredError",
     "UserNotFoundError",

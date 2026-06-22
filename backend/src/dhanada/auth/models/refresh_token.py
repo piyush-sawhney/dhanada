@@ -1,14 +1,17 @@
 """RefreshToken model for token rotation tracking."""
 
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dhanada.auth.models.base import BaseModel
+
+if TYPE_CHECKING:
+    from dhanada.auth.models.user import User
 
 
 class RefreshToken(BaseModel):
@@ -39,17 +42,17 @@ class RefreshToken(BaseModel):
         nullable=False,
         comment="Token family for rotation chain tracking",
     )
-    parent_token_hash: Mapped[Optional[str]] = mapped_column(
+    parent_token_hash: Mapped[str | None] = mapped_column(
         String(128),
         nullable=True,
         comment="Hash of the previous token in the rotation chain",
     )
 
-    user_agent: Mapped[Optional[str]] = mapped_column(
+    user_agent: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
     )
-    ip_address: Mapped[Optional[str]] = mapped_column(
+    ip_address: Mapped[str | None] = mapped_column(
         String(45),
         nullable=True,
     )
@@ -59,11 +62,11 @@ class RefreshToken(BaseModel):
         index=True,
         nullable=False,
     )
-    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+    revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
-    replaced_at: Mapped[Optional[datetime]] = mapped_column(
+    replaced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="When this token was rotated to a new one",

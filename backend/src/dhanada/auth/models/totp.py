@@ -1,14 +1,18 @@
 """TOTPSecret model with encrypted TOTP secrets."""
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, func
-from sqlalchemy.dialects.postgresql import JSON, UUID as PG_UUID
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String
+from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dhanada.auth.models.base import BaseModel
+
+if TYPE_CHECKING:
+    from dhanada.auth.models.user import User
 
 
 class TOTPSecret(BaseModel):
@@ -71,13 +75,13 @@ class TOTPSecret(BaseModel):
         default=False,
         nullable=False,
     )
-    verified_at: Mapped[Optional[datetime]] = mapped_column(
+    verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
 
     # Backup codes (bcrypt hashed)
-    backup_codes: Mapped[Optional[List[str]]] = mapped_column(
+    backup_codes: Mapped[list[str] | None] = mapped_column(
         JSON,
         default=list,
         nullable=True,

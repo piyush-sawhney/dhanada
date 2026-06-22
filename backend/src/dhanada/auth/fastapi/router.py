@@ -1,23 +1,25 @@
 """FastAPI router for authentication endpoints."""
 
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.exceptions import (
+    AccountLockedError,
     AuthenticationError,
+    CannotDeleteSystemRoleError,
     InvalidTokenError,
     SuperuserAlreadyExistsError,
     TokenExpiredError,
     TOTPAlreadyEnabledError,
     TOTPError,
     TOTPInvalidTokenError,
-    TOTPNotEnabledError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
-from dhanada.auth.models.user import User
 from dhanada.auth.fastapi.dependencies import (
     get_auth_manager,
     get_current_user,
@@ -27,27 +29,41 @@ from dhanada.auth.fastapi.dependencies import (
     require_superuser,
 )
 from dhanada.auth.fastapi.schemas import (
+    AddPermissionRequest,
     AdminCreateUserRequest,
     AdminResetUserAuthResponse,
+    AdminUpdateUserRequest,
     AssignRoleRequest,
     BootstrapCompleteResponse,
     BootstrapRequest,
     BootstrapStatusResponse,
     ChangePasswordRequest,
+    CreateRoleRequest,
     ErrorResponse,
     LoginRequest,
     PermissionCheckResponse,
     ProfileUpdateRequest,
     RefreshRequest,
+    RevokeRoleRequest,
+    RoleListResponse,
+    RolePermissionResponse,
+    RoleResponse,
+    SendVerificationResponse,
     SetupCompleteRequest,
     SetupRequiredResponse,
+    TokenResponse,
     TOTPDisableRequest,
     TOTPEnableResponse,
     TOTPVerifyRequest,
-    TokenResponse,
     UserCreatedResponse,
+    UserDeleteResponse,
+    UserListResponse,
     UserResponse,
+    VerifyEmailResponse,
 )
+from dhanada.auth.models.user import User
+from dhanada.auth.rate_limit import limiter
+
 auth_router = APIRouter(tags=["auth"])
 
 
@@ -55,7 +71,13 @@ def _get_client_info(request: Request) -> tuple[str | None, str | None]:
     """Extract client IP and user agent from request."""
     user_agent = request.headers.get("user-agent")
     forwarded = request.headers.get("x-forwarded-for")
-    ip_address = forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else None
+    ip_address = (
+        forwarded.split(",")[0].strip()
+        if forwarded
+        else request.client.host
+        if request.client
+        else None
+    )
     return user_agent, ip_address
 
 
@@ -67,9 +89,9 @@ def _get_client_info(request: Request) -> tuple[str | None, str | None]:
 )
 async def register(
     body: AdminCreateUserRequest,
-    user: User = Depends(get_current_user),
-    _=Depends(require_permission("users", "create")),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    _: object = Depends(require_permission("users", "create")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> UserCreatedResponse:
     """Register a new user. Requires users:create permission.
 
@@ -104,7 +126,7 @@ async def register(
             updated_at=new_user.updated_at,
         )
     except UserAlreadyExistsError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -116,7 +138,7 @@ async def register(
 async def bootstrap(
     body: BootstrapRequest,
     request: Request,
-    auth: AuthManager = Depends(get_auth_manager),
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> BootstrapCompleteResponse:
     """Register the first superuser. Only works when no users exist.
 
@@ -151,9 +173,9 @@ async def bootstrap(
             totp_required=True,
         )
     except SuperuserAlreadyExistsError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
     except UserAlreadyExistsError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
 
 
 @auth_router.get(
@@ -161,7 +183,7 @@ async def bootstrap(
     response_model=BootstrapStatusResponse,
 )
 async def bootstrap_status(
-    auth: AuthManager = Depends(get_auth_manager),
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> BootstrapStatusResponse:
     """Check if the system needs bootstrapping (no users exist)."""
     return BootstrapStatusResponse(needs_bootstrap=not await auth.has_users())
@@ -175,10 +197,11 @@ async def bootstrap_status(
         403: {"model": ErrorResponse},
     },
 )
+@limiter.limit("5/minute")
 async def login(
     body: LoginRequest,
     request: Request,
-    auth: AuthManager = Depends(get_auth_manager),
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> TokenResponse | SetupRequiredResponse:
     """Login with email and password.
 
@@ -190,6 +213,17 @@ async def login(
     try:
         user_agent, ip_address = _get_client_info(request)
         user = await auth.verify_credentials(body.email, body.password)
+
+        # Check if inactive account has expired
+        if (
+            not user.is_active
+            and user.expires_at is not None
+            and user.expires_at <= datetime.now(UTC)
+        ):
+            raise AuthenticationError(
+                "Your account has expired. Please contact an administrator.",
+                hint="A new account must be created by an administrator.",
+            )
 
         # Setup flow for inactive users or users without TOTP
         if not user.is_active or not await auth.totp_is_enabled(user.id):
@@ -211,9 +245,11 @@ async def login(
             expires_in=tokens.expires_in,
         )
     except AuthenticationError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
+    except AccountLockedError as e:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)) from None
     except TOTPInvalidTokenError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -227,8 +263,8 @@ async def login(
 async def setup_complete(
     body: SetupCompleteRequest,
     request: Request,
-    setup_user: User = Depends(require_setup_token),
-    auth: AuthManager = Depends(get_auth_manager),
+    setup_user: User = Depends(require_setup_token),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> TokenResponse:
     """Complete first-time setup: set password, activate account, issue tokens.
 
@@ -263,7 +299,7 @@ async def setup_complete(
 async def refresh(
     body: RefreshRequest,
     request: Request,
-    auth: AuthManager = Depends(get_auth_manager),
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> TokenResponse:
     """Refresh access token using a refresh token."""
     try:
@@ -280,13 +316,13 @@ async def refresh(
             expires_in=result.expires_in,
         )
     except (InvalidTokenError, TokenExpiredError, AuthenticationError) as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
 
 
 @auth_router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     body: RefreshRequest,
-    auth: AuthManager = Depends(get_auth_manager),
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> None:
     """Revoke a refresh token."""
     await auth.revoke_session(body.refresh_token)
@@ -294,8 +330,8 @@ async def logout(
 
 @auth_router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_all(
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> None:
     """Revoke all refresh tokens for the current user."""
     await auth.revoke_all_sessions(user.id)
@@ -306,8 +342,8 @@ async def logout_all(
     response_model=UserResponse,
 )
 async def get_me(
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> UserResponse:
     """Get current user profile."""
     user = await auth.get_user(user.id)
@@ -328,28 +364,36 @@ async def get_me(
 @auth_router.patch(
     "/me",
     response_model=UserResponse,
+    responses={409: {"model": ErrorResponse}},
 )
 async def update_me(
     body: ProfileUpdateRequest,
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> UserResponse:
     """Update current user profile."""
-    updated = await auth.update_profile(
-        user.id, full_name=body.full_name, current_user_id=user.id,
-    )
-    return UserResponse(
-        id=updated.id,
-        email=updated.email,
-        username=updated.username,
-        full_name=updated.full_name,
-        is_active=updated.is_active,
-        is_superuser=updated.is_superuser,
-        email_verified=updated.email_verified,
-        roles=[r.name for r in updated.roles],
-        created_at=updated.created_at,
-        updated_at=updated.updated_at,
-    )
+    try:
+        updated = await auth.update_profile(
+            user.id,
+            full_name=body.full_name,
+            email=body.email,
+            username=body.username,
+            current_user_id=user.id,
+        )
+        return UserResponse(
+            id=updated.id,
+            email=updated.email,
+            username=updated.username,
+            full_name=updated.full_name,
+            is_active=updated.is_active,
+            is_superuser=updated.is_superuser,
+            email_verified=updated.email_verified,
+            roles=[r.name for r in updated.roles],
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+        )
+    except UserAlreadyExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -359,17 +403,19 @@ async def update_me(
 )
 async def change_password(
     body: ChangePasswordRequest,
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> None:
     """Change current user's password."""
     try:
         await auth.change_password(
-            user.id, body.old_password, body.new_password,
+            user.id,
+            body.old_password,
+            body.new_password,
             current_user_id=user.id,
         )
     except AuthenticationError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -378,8 +424,8 @@ async def change_password(
     responses={409: {"model": ErrorResponse}},
 )
 async def enable_totp(
-    user: User = Depends(get_setup_or_active_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_setup_or_active_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> TOTPEnableResponse:
     """Enable TOTP two-factor authentication.
 
@@ -396,7 +442,7 @@ async def enable_totp(
             backup_codes=result.backup_codes,
         )
     except TOTPAlreadyEnabledError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -405,9 +451,9 @@ async def enable_totp(
 )
 async def verify_totp(
     body: TOTPVerifyRequest,
-    user: User = Depends(get_setup_or_active_user),
-    auth: AuthManager = Depends(get_auth_manager),
-) -> dict:
+    user: User = Depends(get_setup_or_active_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
     """Verify and confirm TOTP enrollment.
 
     Works with both a regular JWT (active user) and a setup token (first-time flow).
@@ -416,7 +462,7 @@ async def verify_totp(
         verified = await auth.verify_and_confirm_totp(user.id, body.token)
         return {"verified": verified}
     except TOTPError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -426,15 +472,15 @@ async def verify_totp(
 )
 async def disable_totp(
     body: TOTPDisableRequest,
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
-) -> dict:
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
     """Disable TOTP two-factor authentication."""
     try:
         disabled = await auth.disable_totp(user.id, body.token)
         return {"disabled": disabled}
     except TOTPError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -442,9 +488,9 @@ async def disable_totp(
     status_code=status.HTTP_200_OK,
 )
 async def generate_backup_codes(
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
-) -> dict:
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
     """Generate new backup codes (invalidates old ones)."""
     codes = await auth.generate_backup_codes(user.id)
     return {"backup_codes": codes}
@@ -457,13 +503,15 @@ async def generate_backup_codes(
 async def assign_role(
     user_id: UUID,
     body: AssignRoleRequest,
-    user: User = Depends(get_current_user),
-    _=Depends(require_permission("roles", "assign")),
-    auth: AuthManager = Depends(get_auth_manager),
-) -> dict:
+    user: User = Depends(get_current_user),  # noqa: B008
+    _: object = Depends(require_permission("roles", "assign")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
     """Assign a role to a user. Requires roles:assign permission."""
     assigned = await auth.assign_role(
-        user_id, body.role_name, current_user_id=user.id,
+        user_id,
+        body.role_name,
+        current_user_id=user.id,
     )
     return {"assigned": assigned}
 
@@ -474,8 +522,8 @@ async def assign_role(
 )
 async def get_roles(
     user_id: UUID,
-    _=Depends(require_permission("roles", "read")),
-    auth: AuthManager = Depends(get_auth_manager),
+    _: object = Depends(require_permission("roles", "read")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> list[str]:
     """Get roles for a user. Requires roles:read permission."""
     return await auth.get_user_roles(user_id)
@@ -488,8 +536,8 @@ async def get_roles(
 async def check_permission(
     resource: str,
     action: str,
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> PermissionCheckResponse:
     """Check if the current user has a specific permission."""
     result = await auth.check_permission(user.id, resource, action)
@@ -505,8 +553,8 @@ async def check_permission(
     response_model=list[str],
 )
 async def get_permissions(
-    user: User = Depends(get_current_user),
-    auth: AuthManager = Depends(get_auth_manager),
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> list[str]:
     """Get all permissions for the current user."""
     return await auth.get_user_permissions(user.id)
@@ -518,8 +566,8 @@ async def get_permissions(
 )
 async def get_user(
     user_id: UUID,
-    _=Depends(require_permission("users", "read")),
-    auth: AuthManager = Depends(get_auth_manager),
+    _: object = Depends(require_permission("users", "read")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> UserResponse:
     """Get a user by ID. Requires users:read permission."""
     try:
@@ -537,7 +585,9 @@ async def get_user(
             updated_at=user.updated_at,
         )
     except UserNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
 
 
 @auth_router.post(
@@ -547,8 +597,8 @@ async def get_user(
 )
 async def admin_reset_user_auth(
     user_id: UUID,
-    user: User = Depends(require_superuser),
-    auth: AuthManager = Depends(get_auth_manager),
+    _user: User = Depends(require_superuser),  # noqa: B008  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008  # noqa: B008
 ) -> AdminResetUserAuthResponse:
     """Admin force-reset a user's authentication.
 
@@ -558,8 +608,283 @@ async def admin_reset_user_auth(
     """
     try:
         temp_password = await auth.reset_user_auth(
-            user_id=user_id, current_user_id=user.id,
+            user_id=user_id,
+            current_user_id=_user.id,
         )
         return AdminResetUserAuthResponse(temporary_password=temp_password)
     except UserNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
+
+
+@auth_router.get(
+    "/verify-email",
+    response_model=VerifyEmailResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+async def verify_email(
+    token: str,
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> VerifyEmailResponse:
+    """Verify email address using a verification token."""
+    try:
+        result = await auth.verify_email(token)
+        return VerifyEmailResponse(verified=result.verified, email=result.email)
+    except (InvalidTokenError, TokenExpiredError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+    except UserNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from None
+
+
+@auth_router.post(
+    "/send-verification",
+    response_model=SendVerificationResponse,
+)
+async def send_verification_email(
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> SendVerificationResponse:
+    """Send a verification email to the current user."""
+    sent = await auth.send_verification_email(user.id)
+    return SendVerificationResponse(sent=sent)
+
+
+# ---------------------------------------------------------------------------
+# Admin: User CRUD
+# ---------------------------------------------------------------------------
+
+
+@auth_router.get(
+    "/users",
+    response_model=UserListResponse,
+)
+async def list_users(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None, max_length=200),
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> UserListResponse:
+    """List all users with pagination and optional search. Requires superuser."""
+    users, total = await auth.search_users(search, page, per_page)
+    return UserListResponse(
+        users=[
+            UserResponse(
+                id=u.id,
+                email=u.email,
+                username=u.username,
+                full_name=u.full_name,
+                is_active=u.is_active,
+                is_superuser=u.is_superuser,
+                email_verified=u.email_verified,
+                roles=[r.name for r in u.roles],
+                created_at=u.created_at,
+                updated_at=u.updated_at,
+            )
+            for u in users
+        ],
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
+
+
+@auth_router.patch(
+    "/users/{user_id}",
+    response_model=UserResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def admin_update_user(
+    user_id: UUID,
+    body: AdminUpdateUserRequest,
+    user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> UserResponse:
+    """Update any user's profile. Requires superuser."""
+    try:
+        updated = await auth.admin_update_user(
+            user_id,
+            email=body.email,
+            username=body.username,
+            full_name=body.full_name,
+            is_active=body.is_active,
+            current_user_id=user.id,
+        )
+        return UserResponse(
+            id=updated.id,
+            email=updated.email,
+            username=updated.username,
+            full_name=updated.full_name,
+            is_active=updated.is_active,
+            is_superuser=updated.is_superuser,
+            email_verified=updated.email_verified,
+            roles=[r.name for r in updated.roles],
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+        )
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
+    except UserAlreadyExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
+
+
+@auth_router.delete(
+    "/users/{user_id}",
+    response_model=UserDeleteResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def admin_delete_user(
+    user_id: UUID,
+    user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> UserDeleteResponse:
+    """Soft-delete a user. Requires superuser."""
+    try:
+        deleted = await auth.delete_user(
+            user_id,
+            current_user_id=user.id,
+        )
+        return UserDeleteResponse(deleted=deleted)
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
+
+
+# ---------------------------------------------------------------------------
+# Role CRUD
+# ---------------------------------------------------------------------------
+
+
+@auth_router.post(
+    "/roles/create",
+    response_model=RoleResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": ErrorResponse}},
+)
+async def create_role(
+    body: CreateRoleRequest,
+    user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> RoleResponse:
+    """Create a new role. Requires superuser."""
+    role = await auth.create_role(
+        body.name,
+        description=body.description,
+        current_user_id=user.id,
+    )
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Role '{body.name}' already exists",
+        )
+    return RoleResponse(
+        id=role.id,
+        name=role.name,
+        description=role.description,
+        is_system=role.is_system,
+        permissions=[
+            RolePermissionResponse(resource=p.resource, action=p.action) for p in role.permissions
+        ],
+        created_at=role.created_at,
+        updated_at=role.updated_at,
+    )
+
+
+@auth_router.get(
+    "/roles/all",
+    response_model=RoleListResponse,
+)
+async def list_roles(
+    _user: User = Depends(get_current_user),  # noqa: B008
+    _: object = Depends(require_permission("roles", "read")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> RoleListResponse:
+    """List all roles. Requires roles:read permission."""
+    roles = await auth.list_roles()
+    return RoleListResponse(
+        roles=[
+            RoleResponse(
+                id=r.id,
+                name=r.name,
+                description=r.description,
+                is_system=r.is_system,
+                permissions=[
+                    RolePermissionResponse(resource=p.resource, action=p.action)
+                    for p in r.permissions
+                ],
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in roles
+        ],
+    )
+
+
+@auth_router.delete(
+    "/roles",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"model": ErrorResponse}},
+)
+async def revoke_role(
+    user_id: UUID,
+    body: RevokeRoleRequest,
+    _user: User = Depends(get_current_user),  # noqa: B008
+    _: object = Depends(require_permission("roles", "assign")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
+    """Revoke a role from a user. Requires roles:assign permission."""
+    revoked = await auth.revoke_role(user_id, body.role_name)
+    if not revoked:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User or role not found",
+        )
+    return {"revoked": True}
+
+
+@auth_router.delete(
+    "/roles/{role_id}",
+    status_code=status.HTTP_200_OK,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def delete_role(
+    role_id: UUID,
+    user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
+    """Delete a role. Cannot delete system roles. Requires superuser."""
+    try:
+        deleted = await auth.delete_role(role_id, current_user_id=user.id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Role not found",
+            )
+        return {"deleted": True}
+    except CannotDeleteSystemRoleError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+
+
+@auth_router.post(
+    "/roles/{role_name}/permissions",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"model": ErrorResponse}},
+)
+async def add_permission_to_role(
+    role_name: str,
+    body: AddPermissionRequest,
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    ) -> dict[str, Any]:
+    """Add a permission to a role. Requires superuser."""
+    added = await auth.add_permission_to_role(role_name, body.resource, body.action)
+    if not added:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role '{role_name}' not found",
+        )
+    return {"added": True}

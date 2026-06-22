@@ -59,9 +59,8 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
-# Alembic
-backend/migrations/versions/*.py
-!backend/migrations/versions/.gitkeep
+# Alembic (keep __pycache__ out, not the migration source files)
+backend/migrations/versions/__pycache__/
 
 # Logs
 *.log

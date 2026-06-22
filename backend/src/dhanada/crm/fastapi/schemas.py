@@ -2,9 +2,10 @@
 
 import re
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from dhanada.crm.models import DocumentType
 
@@ -53,6 +54,7 @@ class ClientResponse(BaseModel):
 
 class ClientDetailResponse(ClientResponse):
     """Includes decrypted PAN — only returned with manage-pan permission."""
+
     pan: str | None = None
 
 
@@ -76,14 +78,12 @@ class DocumentCreateRequest(BaseModel):
     def validate_document_type(cls, v: str) -> str:
         valid = {t.value for t in DocumentType}
         if v not in valid:
-            raise ValueError(
-                f"Invalid document type. Must be one of: {', '.join(sorted(valid))}"
-            )
+            raise ValueError(f"Invalid document type. Must be one of: {', '.join(sorted(valid))}")
         return v
 
     @field_validator("document_type_other")
     @classmethod
-    def validate_other_required(cls, v: str | None, info) -> str | None:
+    def validate_other_required(cls, v: str | None, info: ValidationInfo) -> str | None:
         if info.data.get("document_type") == "other" and not v:
             raise ValueError("document_type_other is required when document_type is 'other'")
         return v
@@ -105,7 +105,7 @@ class DocumentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_document(cls, doc) -> "DocumentResponse":
+    def from_document(cls, doc: Any) -> "DocumentResponse":
         return cls(
             id=doc.id,
             client_id=doc.client_id,
@@ -135,9 +135,7 @@ class DocumentUpdateRequest(BaseModel):
             return v
         valid = {t.value for t in DocumentType}
         if v not in valid:
-            raise ValueError(
-                f"Invalid document type. Must be one of: {', '.join(sorted(valid))}"
-            )
+            raise ValueError(f"Invalid document type. Must be one of: {', '.join(sorted(valid))}")
         return v
 
 

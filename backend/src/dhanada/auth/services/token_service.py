@@ -3,7 +3,7 @@
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dhanada.auth.auth.jwt import JWTManager
 from dhanada.auth.db.repository import RefreshTokenRepository, UserRepository
@@ -20,7 +20,7 @@ class TokenResult:
 
     access_token: str
     refresh_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105
     expires_in: int = 900  # seconds
 
 
@@ -78,8 +78,6 @@ class TokenService:
 
         # Store refresh token hash for rotation tracking
         token_hash = self._hash_token(refresh_token)
-        expires_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        # Add expiration from JWT config (handled via config)
 
         await self._token_repo.create(
             user_id=user_id,
@@ -87,7 +85,7 @@ class TokenService:
             family_id=family_id,
             user_agent=user_agent,
             ip_address=ip_address,
-            expires_at=datetime.now(timezone.utc) + self._jwt_manager._refresh_expire,
+            expires_at=datetime.now(UTC) + self._jwt_manager._refresh_expire,
         )
 
         return TokenResult(
@@ -125,7 +123,7 @@ class TokenService:
             raise InvalidTokenError(
                 "Refresh token expired, please log in again",
                 hint="Use your credentials to get a new session",
-            )
+            ) from None
 
         user_id = uuid.UUID(payload.sub)
         family_id = uuid.UUID(payload.family_id)
@@ -160,7 +158,7 @@ class TokenService:
         # Mark old token as replaced
         await self._token_repo.update(
             stored_token.id,
-            replaced_at=datetime.now(timezone.utc),
+            replaced_at=datetime.now(UTC),
         )
 
         # Create new tokens in the same family
@@ -183,7 +181,7 @@ class TokenService:
             parent_token_hash=token_hash,
             user_agent=user_agent,
             ip_address=ip_address,
-            expires_at=datetime.now(timezone.utc) + self._jwt_manager._refresh_expire,
+            expires_at=datetime.now(UTC) + self._jwt_manager._refresh_expire,
         )
 
         return TokenResult(
@@ -198,9 +196,7 @@ class TokenService:
         stored = await self._token_repo.get_by_token_hash(token_hash)
         if stored is None or stored.is_revoked:
             return False
-        await self._token_repo.update(
-            stored.id, revoked_at=datetime.now(timezone.utc)
-        )
+        await self._token_repo.update(stored.id, revoked_at=datetime.now(UTC))
         return True
 
     async def revoke_all_user_tokens(self, user_id: uuid.UUID) -> int:

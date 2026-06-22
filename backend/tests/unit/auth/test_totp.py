@@ -1,9 +1,7 @@
 """Tests for TOTP generation and validation."""
 
 import pyotp
-import pytest
 
-from dhanada.auth.auth.totp import TOTPManager
 from dhanada.auth.crypto.envelope import EncryptedPayload
 
 
@@ -74,9 +72,6 @@ class TestTOTPManager:
         """Token should verify within configured window."""
         secret = totp_manager.generate_secret()
         totp = pyotp.TOTP(secret)
-        # Get a past token (within default window of 1)
-        import time
-        totp_instance = pyotp.TOTP(secret)
         # The window of 1 means ±30 seconds, so the previous token works
         assert totp_manager.verify(secret, totp.now()) is True
 
@@ -84,6 +79,7 @@ class TestTOTPManager:
         """Should generate exactly BACKUP_CODE_COUNT backup codes."""
         codes = totp_manager.generate_backup_codes()
         from dhanada.auth.constants import BACKUP_CODE_COUNT
+
         assert len(codes) == BACKUP_CODE_COUNT
 
     def test_generate_backup_codes_unique(self, totp_manager):

@@ -39,6 +39,10 @@ class UserAlreadyExistsError(AuthError):
     """User already exists."""
 
 
+class AccountLockedError(AuthError):
+    """Account is temporarily locked due to too many failed attempts."""
+
+
 class InvalidCredentialsError(AuthError):
     """Invalid username/email or password."""
 
@@ -73,3 +77,7 @@ class ConfigurationError(AuthError):
 
 class SuperuserAlreadyExistsError(AuthError):
     """Superuser already exists - bootstrap not allowed."""
+
+
+class CannotDeleteSystemRoleError(AuthError):
+    """Cannot delete a system-protected role."""

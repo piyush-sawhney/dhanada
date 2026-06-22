@@ -3,9 +3,8 @@
 import uuid
 
 import pytest
-from jose import jwt
 
-from dhanada.auth.auth.jwt import AccessTokenPayload, JWTManager, RefreshTokenPayload
+from dhanada.auth.auth.jwt import JWTManager
 from dhanada.auth.exceptions import InvalidTokenError, TokenExpiredError
 
 
@@ -73,7 +72,7 @@ class TestJWTManager:
     def test_expired_token_raises(self):
         """Expired token should raise TokenExpiredError."""
         mgr = JWTManager(
-            secret_key="test-secret-key-for-unit-tests-min-32-char!",
+            secret_key="test-secret-key-for-unit-tests-min-32-char!",  # noqa: S106
             access_token_expire_minutes=-1,  # Already expired
         )
         user_id = uuid.uuid4()

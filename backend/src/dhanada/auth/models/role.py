@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.ext.associationproxy import AssociationProxy, association_proxy
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dhanada.auth.models.base import BaseModel
@@ -66,7 +66,7 @@ class Role(BaseModel):
         lazy="selectin",
         cascade="all, delete-orphan",
     )
-    users: list["User"] = association_proxy("user_role_links", "user")
+    users: AssociationProxy[list["User"]] = association_proxy("user_role_links", "user")
 
     permissions: Mapped[list["RolePermission"]] = relationship(
         "RolePermission",
@@ -101,7 +101,7 @@ class RolePermission(BaseModel):
         nullable=False,
     )
 
-    __table_args__ = (
+    __table_args__ = (  # type: ignore[assignment]
         UniqueConstraint("role_id", "resource", "action", name="uq_role_resource_action"),
         {"schema": "auth"},
     )
@@ -112,4 +112,7 @@ class RolePermission(BaseModel):
     )
 
     def __repr__(self) -> str:
-        return f"<RolePermission(role_id={self.role_id}, resource={self.resource}, action={self.action})>"
+        return (
+            f"<RolePermission(role_id={self.role_id}, "
+            f"resource={self.resource}, action={self.action})>"
+        )

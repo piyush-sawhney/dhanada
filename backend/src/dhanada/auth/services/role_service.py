@@ -5,9 +5,11 @@ from dataclasses import dataclass
 
 from dhanada.auth.db.repository import RoleRepository, UserRepository
 from dhanada.auth.exceptions import (
+    CannotDeleteSystemRoleError,
     PermissionDeniedError,
     UserNotFoundError,
 )
+from dhanada.auth.models.role import Role
 
 
 @dataclass
@@ -31,7 +33,9 @@ class RoleService:
         self._user_repo = user_repo
 
     async def assign_role(
-        self, user_id: uuid.UUID, role_name: str,
+        self,
+        user_id: uuid.UUID,
+        role_name: str,
         created_by_id: uuid.UUID | None = None,
     ) -> bool:
         """Assign a role to a user."""
@@ -44,7 +48,9 @@ class RoleService:
             return False
 
         return await self._role_repo.assign_role_to_user(
-            user_id, role.id, created_by_id=created_by_id,
+            user_id,
+            role.id,
+            created_by_id=created_by_id,
         )
 
     async def revoke_role(self, user_id: uuid.UUID, role_name: str) -> bool:
@@ -108,28 +114,40 @@ class RoleService:
                 hint=f"Contact an administrator to request '{resource}:{action}' access",
             )
 
-    async def create_role(
-        self, name: str, description: str | None = None
-    ) -> bool:
-        """Create a new role."""
+    async def create_role(self, name: str, description: str | None = None) -> Role | None:
+        """Create a new role. Returns the role or None if it already exists."""
         existing = await self._role_repo.get_by_name(name)
         if existing is not None:
-            return False
-        await self._role_repo.create(
-            name=name, description=description, is_system=False
-        )
-        return True
+            return None
+        role = await self._role_repo.create(name=name, description=description, is_system=False)
+        return role
 
-    async def add_permission(
-        self, role_name: str, resource: str, action: str
-    ) -> bool:
+    async def get_role_by_name(self, name: str) -> Role | None:
+        """Get a role by name."""
+        return await self._role_repo.get_by_name(name)
+
+    async def list_roles(self) -> list[Role]:
+        """List all roles."""
+        return await self._role_repo.get_all()
+
+    async def delete_role(self, role_id: uuid.UUID) -> bool:
+        """Delete a role. Cannot delete system roles."""
+        role = await self._role_repo.get(role_id)
+        if role is None:
+            return False
+        if role.is_system:
+            raise CannotDeleteSystemRoleError(
+                f"Cannot delete system role '{role.name}'",
+                hint="System roles are protected",
+            )
+        return await self._role_repo.delete(role_id)
+
+    async def add_permission(self, role_name: str, resource: str, action: str) -> bool:
         """Add a permission to a role."""
         role = await self._role_repo.get_by_name(role_name)
         if role is None:
             return False
-        await self._role_repo.create(
-            role_id=role.id, resource=resource, action=action
-        )
+        await self._role_repo.create(role_id=role.id, resource=resource, action=action)
         return True
 
     async def get_user_permissions(self, user_id: uuid.UUID) -> list[str]:

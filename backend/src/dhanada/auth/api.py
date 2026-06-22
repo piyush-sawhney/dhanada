@@ -2,6 +2,7 @@
 
 import secrets
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from dhanada.auth.auth.jwt import JWTManager
 from dhanada.auth.auth.passwords import PasswordManager
@@ -16,16 +17,20 @@ from dhanada.auth.db.repository import (
     UserRepository,
 )
 from dhanada.auth.db.session import DatabaseSession
+from dhanada.auth.email.sender import EmailSender
 from dhanada.auth.exceptions import (
     SuperuserAlreadyExistsError,
     TOTPInvalidTokenError,
     TOTPNotEnabledError,
 )
+from dhanada.auth.models.role import Role
 from dhanada.auth.models.user import User
+from dhanada.auth.services.audit_service import AuditService
 from dhanada.auth.services.role_service import PermissionCheck, RoleService
 from dhanada.auth.services.token_service import TokenResult, TokenService
 from dhanada.auth.services.totp_service import TOTPEnrollmentResult, TOTPService
 from dhanada.auth.services.user_service import UserService
+from dhanada.auth.services.verification_service import VerificationResult, VerificationService
 
 
 class AuthManager:
@@ -47,32 +52,50 @@ class AuthManager:
         self._envelope = EnvelopeEncryption(kek_manager)
 
         # Initialize primitives
+        previous_keys = {}
+        for i, key in enumerate(config.jwt_previous_secret_keys):
+            previous_keys[f"previous_{i}"] = key
         self._jwt = JWTManager(
             secret_key=config.jwt_secret_key,
+            key_id=config.jwt_key_id,
+            previous_keys=previous_keys or None,
             algorithm=config.jwt_algorithm,
             access_token_expire_minutes=config.jwt_access_token_expire_minutes,
             refresh_token_expire_days=config.jwt_refresh_token_expire_days,
         )
         self._password_manager = PasswordManager(bcrypt_rounds=config.bcrypt_rounds)
+        self._lockout_threshold = config.account_lockout_threshold
+        self._lockout_minutes = config.account_lockout_minutes
+        self._email_sender = EmailSender(config)
+        self._verification_token_ttl = config.email_verification_token_ttl_minutes
         self._totp_manager = TOTPManager(
             encryption=self._envelope,
             issuer=config.totp_issuer,
             window=config.totp_window,
         )
 
+    def _create_user_service(self, user_repo: UserRepository) -> UserService:
+        return UserService(
+            user_repo,
+            self._password_manager,
+            lockout_threshold=self._lockout_threshold,
+            lockout_minutes=self._lockout_minutes,
+        )
+
     async def register_user(
         self,
         email: str,
-        username: str,
-        password: str,
+        username: str | None = None,
+        password: str = "",
         full_name: str | None = None,
         current_user_id: uuid.UUID | None = None,
         is_active: bool = True,
+        ip_address: str | None = None,
     ) -> User:
         """Register a new user."""
         async with self._db.session() as session:
             user_repo = UserRepository(session)
-            service = UserService(user_repo, self._password_manager)
+            service = self._create_user_service(user_repo)
             user = await service.register(
                 email=email,
                 username=username,
@@ -82,12 +105,22 @@ class AuthManager:
             )
             if not is_active:
                 await user_repo.update(
-                    user.id, is_active=False, updated_by_id=current_user_id,
+                    user.id,
+                    is_active=False,
+                    expires_at=datetime.now(UTC) + timedelta(hours=24),
+                    updated_by_id=current_user_id,
                 )
+            AuditService.user_created(
+                user_id=str(user.id),
+                actor_id=str(current_user_id) if current_user_id else None,
+                ip_address=ip_address,
+            )
             return user
 
     async def verify_credentials(
-        self, email: str, password: str,
+        self,
+        email: str,
+        password: str,
     ) -> User:
         """Verify email/password credentials and return the user.
 
@@ -96,15 +129,16 @@ class AuthManager:
         """
         async with self._db.session() as session:
             user_repo = UserRepository(session)
-            service = UserService(user_repo, self._password_manager)
+            service = self._create_user_service(user_repo)
             return await service.authenticate(email, password)
 
     async def create_superuser(
         self,
         email: str,
-        username: str,
-        password: str,
+        username: str | None = None,
+        password: str = "",
         full_name: str | None = None,
+        ip_address: str | None = None,
     ) -> User:
         """Register the first superuser. Only succeeds when no users exist."""
         async with self._db.session() as session:
@@ -114,7 +148,7 @@ class AuthManager:
                     "A superuser already exists — bootstrap is blocked",
                     hint="Login as the existing superuser to manage users",
                 )
-            service = UserService(user_repo, self._password_manager)
+            service = self._create_user_service(user_repo)
             user = await service.register_superuser(
                 email=email,
                 username=username,
@@ -123,6 +157,10 @@ class AuthManager:
             )
             # Self-reference: the superuser is its own creator
             await user_repo.update(user.id, created_by_id=user.id)
+            AuditService.bootstrap_complete(
+                user_id=str(user.id),
+                ip_address=ip_address,
+            )
             return user
 
     async def authenticate(
@@ -141,13 +179,17 @@ class AuthManager:
             user_repo = UserRepository(session)
             token_repo = RefreshTokenRepository(session)
             totp_repo = TOTPRepository(session)
-            role_repo = RoleRepository(session)
 
-            user_service = UserService(user_repo, self._password_manager)
+            user_service = self._create_user_service(user_repo)
             totp_service = TOTPService(totp_repo, user_repo, self._totp_manager)
             token_service = TokenService(token_repo, user_repo, self._jwt)
 
             user = await user_service.authenticate(email, password)
+
+            AuditService.login_success(
+                user_id=str(user.id),
+                ip_address=ip_address,
+            )
 
             # Check TOTP if enabled
             if await totp_service.is_enabled(user.id):
@@ -212,7 +254,7 @@ class AuthManager:
         """Get a user by ID."""
         async with self._db.session() as session:
             user_repo = UserRepository(session)
-            service = UserService(user_repo, self._password_manager)
+            service = self._create_user_service(user_repo)
             return await service.get_by_id(user_id)
 
     async def change_password(
@@ -221,19 +263,29 @@ class AuthManager:
         old_password: str,
         new_password: str,
         current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
     ) -> User:
         """Change a user's password."""
         async with self._db.session() as session:
             user_repo = UserRepository(session)
-            service = UserService(user_repo, self._password_manager)
+            service = self._create_user_service(user_repo)
             user = await service.change_password(
-                user_id, old_password, new_password,
+                user_id,
+                old_password,
+                new_password,
                 updated_by_id=current_user_id,
+            )
+            AuditService.password_changed(
+                user_id=str(user_id),
+                actor_id=str(current_user_id) if current_user_id else None,
+                ip_address=ip_address,
             )
             return user
 
     async def enable_totp(
-        self, user_id: uuid.UUID, generate_backup_codes: bool = True,
+        self,
+        user_id: uuid.UUID,
+        generate_backup_codes: bool = True,
     ) -> TOTPEnrollmentResult:
         """Enable TOTP for a user."""
         async with self._db.session() as session:
@@ -242,9 +294,7 @@ class AuthManager:
             service = TOTPService(totp_repo, user_repo, self._totp_manager)
             return await service.enable(user_id, generate_backup_codes=generate_backup_codes)
 
-    async def verify_and_confirm_totp(
-        self, user_id: uuid.UUID, token: str
-    ) -> bool:
+    async def verify_and_confirm_totp(self, user_id: uuid.UUID, token: str) -> bool:
         """Verify and confirm TOTP enrollment."""
         async with self._db.session() as session:
             totp_repo = TOTPRepository(session)
@@ -260,9 +310,7 @@ class AuthManager:
             service = TOTPService(totp_repo, user_repo, self._totp_manager)
             return await service.disable(user_id, token)
 
-    async def generate_backup_codes(
-        self, user_id: uuid.UUID
-    ) -> list[str]:
+    async def generate_backup_codes(self, user_id: uuid.UUID) -> list[str]:
         """Generate new backup codes."""
         async with self._db.session() as session:
             totp_repo = TOTPRepository(session)
@@ -271,17 +319,29 @@ class AuthManager:
             return await service.generate_backup_codes(user_id)
 
     async def assign_role(
-        self, user_id: uuid.UUID, role_name: str,
+        self,
+        user_id: uuid.UUID,
+        role_name: str,
         current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
     ) -> bool:
         """Assign a role to a user."""
         async with self._db.session() as session:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
             service = RoleService(role_repo, user_repo)
-            return await service.assign_role(
-                user_id, role_name, created_by_id=current_user_id,
+            result = await service.assign_role(
+                user_id,
+                role_name,
+                created_by_id=current_user_id,
             )
+            AuditService.role_assigned(
+                user_id=str(user_id),
+                role_name=role_name,
+                actor_id=str(current_user_id) if current_user_id else None,
+                ip_address=ip_address,
+            )
+            return result
 
     async def revoke_role(self, user_id: uuid.UUID, role_name: str) -> bool:
         """Revoke a role from a user."""
@@ -301,19 +361,94 @@ class AuthManager:
             service = RoleService(role_repo, user_repo)
             return await service.check_permission(user_id, resource, action)
 
+    async def assert_permission(self, user_id: uuid.UUID, resource: str, action: str) -> None:
+        """Assert that a user has a permission, raising if denied."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            await service.assert_permission(user_id, resource, action)
+
     async def update_profile(
         self,
         user_id: uuid.UUID,
         full_name: str | None = None,
+        email: str | None = None,
+        username: str | None = None,
         current_user_id: uuid.UUID | None = None,
+        _ip_address: str | None = None,
     ) -> User:
         """Update a user's profile."""
         async with self._db.session() as session:
             user_repo = UserRepository(session)
-            service = UserService(user_repo, self._password_manager)
+            service = self._create_user_service(user_repo)
             return await service.update_profile(
-                user_id, full_name=full_name, updated_by_id=current_user_id,
+                user_id,
+                full_name=full_name,
+                email=email,
+                username=username,
+                updated_by_id=current_user_id,
             )
+
+    async def search_users(
+        self,
+        search: str | None = None,
+        page: int = 1,
+        per_page: int = 20,
+    ) -> tuple[list[User], int]:
+        """Search users with pagination."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            service = self._create_user_service(user_repo)
+            return await service.search_users(search, page, per_page)
+
+    async def admin_update_user(
+        self,
+        user_id: uuid.UUID,
+        email: str | None = None,
+        username: str | None = None,
+        full_name: str | None = None,
+        is_active: bool | None = None,
+        current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
+    ) -> User:
+        """Admin update any user's profile."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            service = self._create_user_service(user_repo)
+            user = await service.admin_update_user(
+                user_id,
+                email=email,
+                username=username,
+                full_name=full_name,
+                is_active=is_active,
+                updated_by_id=current_user_id,
+            )
+            AuditService.user_updated(
+                user_id=str(user_id),
+                actor_id=str(current_user_id) if current_user_id else None,
+                ip_address=ip_address,
+            )
+            return user
+
+    async def delete_user(
+        self,
+        user_id: uuid.UUID,
+        current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
+    ) -> bool:
+        """Soft-delete a user and revoke all sessions."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            service = self._create_user_service(user_repo)
+            result = await service.delete_user(user_id, deleted_by_id=current_user_id)
+            await self.revoke_all_sessions(user_id)
+            AuditService.user_deleted(
+                user_id=str(user_id),
+                actor_id=str(current_user_id) if current_user_id else None,
+                ip_address=ip_address,
+            )
+            return result
 
     async def get_user_roles(self, user_id: uuid.UUID) -> list[str]:
         """Get all role names for a user."""
@@ -322,6 +457,76 @@ class AuthManager:
             user_repo = UserRepository(session)
             service = RoleService(role_repo, user_repo)
             return await service.get_user_roles(user_id)
+
+    async def create_role(
+        self,
+        name: str,
+        description: str | None = None,
+        current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
+    ) -> Role | None:
+        """Create a new role. Returns None if the role already exists."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            role = await service.create_role(name, description)
+            if role is not None:
+                AuditService.role_created(
+                    role_name=name,
+                    actor_id=str(current_user_id) if current_user_id else None,
+                    ip_address=ip_address,
+                )
+            return role
+
+    async def get_role_by_name(self, name: str) -> Role | None:
+        """Get a role by name."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            return await service.get_role_by_name(name)
+
+    async def list_roles(self) -> list[Role]:
+        """List all roles."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            return await service.list_roles()
+
+    async def delete_role(
+        self,
+        role_id: uuid.UUID,
+        current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
+    ) -> bool:
+        """Delete a role."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            result = await service.delete_role(role_id)
+            if result:
+                AuditService.role_deleted(
+                    role_id=str(role_id),
+                    actor_id=str(current_user_id) if current_user_id else None,
+                    ip_address=ip_address,
+                )
+            return result
+
+    async def add_permission_to_role(
+        self,
+        role_name: str,
+        resource: str,
+        action: str,
+    ) -> bool:
+        """Add a permission to a role."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            return await service.add_permission(role_name, resource, action)
 
     async def get_user_permissions(self, user_id: uuid.UUID) -> list[str]:
         """Get all permission strings for a user."""
@@ -399,7 +604,7 @@ class AuthManager:
             user_repo = UserRepository(session)
             token_repo = RefreshTokenRepository(session)
             totp_repo = TOTPRepository(session)
-            user_service = UserService(user_repo, self._password_manager)
+            user_service = self._create_user_service(user_repo)
             totp_service = TOTPService(totp_repo, user_repo, self._totp_manager)
 
             # Enforce TOTP verification before completing setup
@@ -414,10 +619,23 @@ class AuthManager:
             # Only set password and activate for inactive users
             if not user.is_active:
                 await user_service.set_password(
-                    user_id, new_password, updated_by_id=current_user_id,
+                    user_id,
+                    new_password,
+                    updated_by_id=current_user_id,
                 )
                 await user_service.activate_user(
-                    user_id, updated_by_id=current_user_id,
+                    user_id,
+                    updated_by_id=current_user_id,
+                )
+                await user_repo.update(
+                    user_id,
+                    expires_at=None,
+                    updated_by_id=current_user_id,
+                )
+                AuditService.password_changed(
+                    user_id=str(user_id),
+                    actor_id=str(current_user_id),
+                    ip_address=ip_address,
                 )
                 user = await user_service.get_by_id(user_id)
 
@@ -440,6 +658,7 @@ class AuthManager:
         self,
         user_id: uuid.UUID,
         current_user_id: uuid.UUID,
+        ip_address: str | None = None,
     ) -> str:
         """Admin force-reset: disable TOTP, deactivate, set temp password.
 
@@ -451,15 +670,26 @@ class AuthManager:
             user_repo = UserRepository(session)
             totp_repo = TOTPRepository(session)
 
-            user_service = UserService(user_repo, self._password_manager)
+            user_service = self._create_user_service(user_repo)
             await user_service.set_password(
-                user_id, temp_password, updated_by_id=current_user_id,
+                user_id,
+                temp_password,
+                updated_by_id=current_user_id,
             )
             await user_repo.update(
-                user_id, is_active=False, updated_by_id=current_user_id,
+                user_id,
+                is_active=False,
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+                updated_by_id=current_user_id,
             )
             await totp_repo.delete_by_user_id(user_id)
 
+        AuditService.account_reset(
+            user_id=str(user_id),
+            actor_id=str(current_user_id),
+            ip_address=ip_address,
+        )
+        await self.revoke_all_sessions(user_id)
         return temp_password
 
     @staticmethod
@@ -472,6 +702,35 @@ class AuthManager:
         async with self._db.session() as session:
             user_repo = UserRepository(session)
             return await user_repo.count() > 0
+
+    async def cleanup_expired_users(self) -> int:
+        """Hard-delete inactive users whose account expiry has passed."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            service = self._create_user_service(user_repo)
+            return await service.cleanup_expired_users()
+
+    async def verify_email(self, token: str) -> VerificationResult:
+        """Verify a user's email address using a verification token."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            service = VerificationService(
+                jwt_manager=self._jwt,
+                user_repo=user_repo,
+            )
+            return await service.verify(token)
+
+    async def send_verification_email(self, user_id: uuid.UUID) -> bool:
+        """Send a verification email to a user."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            service = VerificationService(
+                jwt_manager=self._jwt,
+                user_repo=user_repo,
+                email_sender=self._email_sender,
+                token_ttl_minutes=self._verification_token_ttl,
+            )
+            return await service.send_verification(user_id)
 
     async def close(self) -> None:
         """Close database connections."""
