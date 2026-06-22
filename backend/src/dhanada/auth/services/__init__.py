@@ -1,5 +1,6 @@
 """Business logic services."""
 
+from dhanada.auth.services.password_reset_service import PasswordResetService
 from dhanada.auth.services.role_service import RoleService
 from dhanada.auth.services.token_service import TokenService
 from dhanada.auth.services.totp_service import TOTPService
@@ -10,4 +11,5 @@ __all__ = [
     "RoleService",
     "TOTPService",
     "TokenService",
+    "PasswordResetService",
 ]

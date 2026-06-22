@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dhanada.auth.models.base import BaseModel
 from dhanada.auth.models.refresh_token import RefreshToken
-from dhanada.auth.models.role import Role, UserRole
+from dhanada.auth.models.role import Role, RolePermission, UserRole
 from dhanada.auth.models.totp import TOTPSecret
 from dhanada.auth.models.user import User
 
@@ -224,6 +224,17 @@ class RoleRepository(BaseRepository[Role]):
                 if perm.resource == resource and perm.action == action:
                     return True
         return False
+
+    async def remove_permission(self, role_id: uuid.UUID, resource: str, action: str) -> bool:
+        result = await self._session.execute(
+            delete(RolePermission).where(
+                RolePermission.role_id == role_id,
+                RolePermission.resource == resource,
+                RolePermission.action == action,
+            )
+        )
+        await self._session.flush()
+        return cast(bool, result.rowcount > 0)
 
 
 class TOTPRepository(BaseRepository[TOTPSecret]):

@@ -40,15 +40,21 @@ from dhanada.auth.fastapi.schemas import (
     ChangePasswordRequest,
     CreateRoleRequest,
     ErrorResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     PermissionCheckResponse,
     ProfileUpdateRequest,
     RefreshRequest,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     RevokeRoleRequest,
     RoleListResponse,
     RolePermissionResponse,
     RoleResponse,
     SendVerificationResponse,
+    SessionListResponse,
+    SessionResponse,
     SetupCompleteRequest,
     SetupRequiredResponse,
     TokenResponse,
@@ -87,8 +93,10 @@ def _get_client_info(request: Request) -> tuple[str | None, str | None]:
     status_code=status.HTTP_201_CREATED,
     responses={409: {"model": ErrorResponse}},
 )
+@limiter.limit("10/minute")
 async def register(
     body: AdminCreateUserRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     _: object = Depends(require_permission("users", "create")),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
@@ -135,6 +143,7 @@ async def register(
     status_code=status.HTTP_201_CREATED,
     responses={409: {"model": ErrorResponse}},
 )
+@limiter.limit("3/minute")
 async def bootstrap(
     body: BootstrapRequest,
     request: Request,
@@ -260,6 +269,7 @@ async def login(
         403: {"model": ErrorResponse},
     },
 )
+@limiter.limit("5/minute")
 async def setup_complete(
     body: SetupCompleteRequest,
     request: Request,
@@ -296,6 +306,7 @@ async def setup_complete(
     response_model=TokenResponse,
     responses={401: {"model": ErrorResponse}},
 )
+@limiter.limit("30/minute")
 async def refresh(
     body: RefreshRequest,
     request: Request,
@@ -335,6 +346,44 @@ async def logout_all(
 ) -> None:
     """Revoke all refresh tokens for the current user."""
     await auth.revoke_all_sessions(user.id)
+
+
+@auth_router.get(
+    "/sessions",
+    response_model=SessionListResponse,
+)
+async def get_my_sessions(
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> SessionListResponse:
+    """Get all active sessions for the current user."""
+    sessions = await auth.get_user_sessions(user.id)
+    return SessionListResponse(
+        sessions=[SessionResponse(**s) for s in sessions],
+    )
+
+
+@auth_router.get(
+    "/admin/users/{user_id}/sessions",
+    response_model=SessionListResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_user_sessions(
+    user_id: UUID,
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> SessionListResponse:
+    """Get all active sessions for a specific user. Requires superuser."""
+    try:
+        sessions = await auth.get_user_sessions(user_id)
+        return SessionListResponse(
+            sessions=[SessionResponse(**s) for s in sessions],
+        )
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        ) from None
 
 
 @auth_router.get(
@@ -401,8 +450,10 @@ async def update_me(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={401: {"model": ErrorResponse}},
 )
+@limiter.limit("5/minute")
 async def change_password(
     body: ChangePasswordRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> None:
@@ -423,7 +474,9 @@ async def change_password(
     response_model=TOTPEnableResponse,
     responses={409: {"model": ErrorResponse}},
 )
+@limiter.limit("5/minute")
 async def enable_totp(
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_setup_or_active_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> TOTPEnableResponse:
@@ -449,8 +502,10 @@ async def enable_totp(
     "/totp/verify",
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("10/minute")
 async def verify_totp(
     body: TOTPVerifyRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_setup_or_active_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
     ) -> dict[str, Any]:
@@ -470,8 +525,10 @@ async def verify_totp(
     status_code=status.HTTP_200_OK,
     responses={400: {"model": ErrorResponse}},
 )
+@limiter.limit("5/minute")
 async def disable_totp(
     body: TOTPDisableRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
     ) -> dict[str, Any]:
@@ -487,7 +544,9 @@ async def disable_totp(
     "/totp/backup-codes",
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("3/minute")
 async def generate_backup_codes(
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
     ) -> dict[str, Any]:
@@ -623,8 +682,10 @@ async def admin_reset_user_auth(
     response_model=VerifyEmailResponse,
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
 )
+@limiter.limit("10/minute")
 async def verify_email(
     token: str,
+    request: Request,  # noqa: ARG001
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> VerifyEmailResponse:
     """Verify email address using a verification token."""
@@ -641,13 +702,64 @@ async def verify_email(
     "/send-verification",
     response_model=SendVerificationResponse,
 )
+@limiter.limit("5/minute")
 async def send_verification_email(
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> SendVerificationResponse:
     """Send a verification email to the current user."""
     sent = await auth.send_verification_email(user.id)
     return SendVerificationResponse(sent=sent)
+
+
+# ---------------------------------------------------------------------------
+# Password Reset
+# ---------------------------------------------------------------------------
+
+
+@auth_router.post(
+    "/forgot-password",
+    response_model=ForgotPasswordResponse,
+)
+@limiter.limit("3/minute")
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    request: Request,  # noqa: ARG001
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> ForgotPasswordResponse:
+    """Request a password reset email.
+
+    Always returns success to prevent email enumeration.
+    If the email exists, a reset link is sent.
+    """
+    await auth.request_password_reset(body.email)
+    return ForgotPasswordResponse()
+
+
+@auth_router.post(
+    "/reset-password",
+    response_model=ResetPasswordResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+@limiter.limit("5/minute")
+async def reset_password(
+    body: ResetPasswordRequest,
+    request: Request,  # noqa: ARG001
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> ResetPasswordResponse:
+    """Reset password using a reset token.
+
+    The token is single-use. All existing sessions are revoked.
+    TOTP enrollment and account active status are preserved.
+    """
+    try:
+        result = await auth.reset_password(body.token, body.new_password)
+        return ResetPasswordResponse(success=result.success, message=result.message)
+    except (InvalidTokenError, TokenExpiredError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+    except UserNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from None
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +981,37 @@ async def delete_role(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
+@auth_router.get(
+    "/roles/{role_name}",
+    response_model=RoleResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_role(
+    role_name: str,
+    _user: User = Depends(get_current_user),  # noqa: B008
+    _: object = Depends(require_permission("roles", "read")),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> RoleResponse:
+    """Get a role with its permissions. Requires roles:read permission."""
+    role = await auth.get_role_by_name(role_name)
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role '{role_name}' not found",
+        )
+    return RoleResponse(
+        id=role.id,
+        name=role.name,
+        description=role.description,
+        is_system=role.is_system,
+        permissions=[
+            RolePermissionResponse(resource=p.resource, action=p.action) for p in role.permissions
+        ],
+        created_at=role.created_at,
+        updated_at=role.updated_at,
+    )
+
+
 @auth_router.post(
     "/roles/{role_name}/permissions",
     status_code=status.HTTP_200_OK,
@@ -888,3 +1031,24 @@ async def add_permission_to_role(
             detail=f"Role '{role_name}' not found",
         )
     return {"added": True}
+
+
+@auth_router.delete(
+    "/roles/{role_name}/permissions",
+    status_code=status.HTTP_200_OK,
+    responses={404: {"model": ErrorResponse}},
+)
+async def remove_permission_from_role(
+    role_name: str,
+    body: AddPermissionRequest,
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> dict[str, Any]:
+    """Remove a permission from a role. Requires superuser."""
+    removed = await auth.remove_permission_from_role(role_name, body.resource, body.action)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role '{role_name}' or permission not found",
+        )
+    return {"removed": True}

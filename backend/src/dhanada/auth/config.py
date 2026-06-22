@@ -69,6 +69,14 @@ class AuthConfig(BaseSettings):
         default=1440,
         description="Email verification token TTL (24h)",
     )
+    base_url: str = Field(
+        default="http://localhost:8000",
+        description="Base URL for email links (verification, password reset)",
+    )
+    password_reset_token_ttl_minutes: int = Field(
+        default=60,
+        description="Password reset token TTL in minutes",
+    )
 
     # Application
     environment: str = Field(default="development", description="Environment name")

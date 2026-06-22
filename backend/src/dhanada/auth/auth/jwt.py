@@ -289,6 +289,56 @@ class JWTManager:
             type=payload["type"],
         )
 
+    def create_reset_token(self, user_id: uuid.UUID, ttl_minutes: int = 60) -> str:
+        """Create a password reset token (single-use).
+
+        Args:
+            user_id: User UUID.
+            ttl_minutes: Token TTL in minutes (default 1h).
+
+        Returns:
+            Signed JWT reset token string.
+        """
+        now = datetime.now(UTC)
+        payload = {
+            "sub": str(user_id),
+            "exp": now + timedelta(minutes=ttl_minutes),
+            "iat": now,
+            "jti": str(uuid.uuid4()),
+            "type": "reset",
+        }
+        headers = {"kid": self._current_key_id}
+        return jwt.encode(
+            payload,
+            self._keys[self._current_key_id],
+            algorithm=self._algorithm,
+            headers=headers,
+        )
+
+    def verify_reset_token(self, token: str) -> TokenPayload:
+        """Verify and decode a password reset token.
+
+        Args:
+            token: JWT reset token string.
+
+        Returns:
+            TokenPayload with decoded claims.
+
+        Raises:
+            TokenExpiredError: Token has expired.
+            InvalidTokenError: Token is malformed or wrong type.
+        """
+        payload = self._decode_token(token)
+        if payload.get("type") != "reset":
+            raise InvalidTokenError("Token is not a reset token")
+        return TokenPayload(
+            sub=payload["sub"],
+            exp=payload["exp"],
+            iat=payload["iat"],
+            jti=payload["jti"],
+            type=payload["type"],
+        )
+
     def _decode_token(self, token: str) -> dict[str, Any]:
         """Decode and validate a JWT token.
 

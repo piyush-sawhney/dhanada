@@ -102,3 +102,38 @@ class EmailSender:
             f"<p>If you did not create this account, please ignore this email.</p>"
         )
         return await self.send(to=to, subject=subject, text=text, html=html)
+
+    async def send_password_reset_email(
+        self,
+        to: str,
+        username: str,
+        reset_url: str,
+    ) -> bool:
+        """Send a password reset link.
+
+        Args:
+            to: Recipient email address.
+            username: User's username for personalisation.
+            reset_url: Full URL with reset token.
+
+        Returns:
+            True if sent successfully.
+        """
+        subject = "Password Reset Request"
+        text = (
+            f"Hi {username},\n\n"
+            f"A password reset was requested for your account. "
+            f"Click the link below to reset your password:\n\n"
+            f"{reset_url}\n\n"
+            f"This link expires in 1 hour.\n\n"
+            f"If you did not request this, please ignore this email."
+        )
+        html = (
+            f"<p>Hi {username},</p>"
+            f"<p>A password reset was requested for your account. "
+            f"Click the link below to reset your password:</p>"
+            f'<p><a href="{reset_url}">{reset_url}</a></p>'
+            f"<p>This link expires in 1 hour.</p>"
+            f"<p>If you did not request this, please ignore this email.</p>"
+        )
+        return await self.send(to=to, subject=subject, text=text, html=html)

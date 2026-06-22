@@ -159,6 +159,25 @@ class SendVerificationResponse(BaseModel):
     message: str = "If the email exists, a verification email has been sent."
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    sent: bool = True
+    message: str = "If the email exists, a password reset link has been sent."
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., description="Password reset token from email")
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class ResetPasswordResponse(BaseModel):
+    success: bool = True
+    message: str = "Password has been reset successfully."
+
+
 class UserListResponse(BaseModel):
     users: list[UserResponse]
     total: int
@@ -210,3 +229,16 @@ class RevokeRoleRequest(BaseModel):
 class AddPermissionRequest(BaseModel):
     resource: str = Field(..., min_length=1, max_length=100)
     action: str = Field(..., min_length=1, max_length=50)
+
+
+class SessionResponse(BaseModel):
+    id: str
+    family_id: str
+    user_agent: str | None = None
+    ip_address: str | None = None
+    created_at: str
+    expires_at: str
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionResponse]

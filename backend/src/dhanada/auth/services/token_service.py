@@ -4,6 +4,7 @@ import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from dhanada.auth.auth.jwt import JWTManager
 from dhanada.auth.db.repository import RefreshTokenRepository, UserRepository
@@ -202,6 +203,24 @@ class TokenService:
     async def revoke_all_user_tokens(self, user_id: uuid.UUID) -> int:
         """Revoke all refresh tokens for a user."""
         return await self._token_repo.revoke_user_tokens(user_id)
+
+    async def get_user_sessions(
+        self,
+        user_id: uuid.UUID,
+    ) -> list[dict[str, Any]]:
+        """Get list of active sessions for a user (metadata only, no token hashes)."""
+        tokens = await self._token_repo.get_active_by_user(user_id)
+        sessions = []
+        for token in tokens:
+            sessions.append({
+                "id": str(token.id),
+                "family_id": str(token.family_id),
+                "user_agent": token.user_agent,
+                "ip_address": token.ip_address,
+                "created_at": token.created_at.isoformat(),
+                "expires_at": token.expires_at.isoformat(),
+            })
+        return sessions
 
     def _hash_token(self, token: str) -> str:
         """Hash a refresh token for secure storage."""

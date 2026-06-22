@@ -3,6 +3,7 @@
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from dhanada.auth.auth.jwt import JWTManager
 from dhanada.auth.auth.passwords import PasswordManager
@@ -26,6 +27,10 @@ from dhanada.auth.exceptions import (
 from dhanada.auth.models.role import Role
 from dhanada.auth.models.user import User
 from dhanada.auth.services.audit_service import AuditService
+from dhanada.auth.services.password_reset_service import (
+    PasswordResetResult,
+    PasswordResetService,
+)
 from dhanada.auth.services.role_service import PermissionCheck, RoleService
 from dhanada.auth.services.token_service import TokenResult, TokenService
 from dhanada.auth.services.totp_service import TOTPEnrollmentResult, TOTPService
@@ -249,6 +254,17 @@ class AuthManager:
             user_repo = UserRepository(session)
             service = TokenService(token_repo, user_repo, self._jwt)
             return await service.revoke_all_user_tokens(user_id)
+
+    async def get_user_sessions(
+        self,
+        user_id: uuid.UUID,
+    ) -> list[dict[str, Any]]:
+        """Get list of active sessions for a user (metadata only)."""
+        async with self._db.session() as session:
+            token_repo = RefreshTokenRepository(session)
+            user_repo = UserRepository(session)
+            service = TokenService(token_repo, user_repo, self._jwt)
+            return await service.get_user_sessions(user_id)
 
     async def get_user(self, user_id: uuid.UUID) -> User:
         """Get a user by ID."""
@@ -528,6 +544,19 @@ class AuthManager:
             service = RoleService(role_repo, user_repo)
             return await service.add_permission(role_name, resource, action)
 
+    async def remove_permission_from_role(
+        self,
+        role_name: str,
+        resource: str,
+        action: str,
+    ) -> bool:
+        """Remove a permission from a role."""
+        async with self._db.session() as session:
+            role_repo = RoleRepository(session)
+            user_repo = UserRepository(session)
+            service = RoleService(role_repo, user_repo)
+            return await service.remove_permission(role_name, resource, action)
+
     async def get_user_permissions(self, user_id: uuid.UUID) -> list[str]:
         """Get all permission strings for a user."""
         async with self._db.session() as session:
@@ -703,6 +732,45 @@ class AuthManager:
             user_repo = UserRepository(session)
             return await user_repo.count() > 0
 
+    async def request_password_reset(self, email: str) -> bool:
+        """Request a password reset email. Always returns True (prevents enumeration)."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            token_repo = RefreshTokenRepository(session)
+            service = PasswordResetService(
+                jwt_manager=self._jwt,
+                user_repo=user_repo,
+                password_manager=self._password_manager,
+                token_repo=token_repo,
+                email_sender=self._email_sender,
+                base_url=self._config.base_url,
+                token_ttl_minutes=self._config.password_reset_token_ttl_minutes,
+            )
+            return await service.request_reset(email)
+
+    async def reset_password(
+        self,
+        token: str,
+        new_password: str,
+    ) -> PasswordResetResult:
+        """Reset a password using a valid reset token.
+
+        Does NOT affect TOTP or account active status.
+        Revokes all existing sessions.
+        Token is single-use.
+        """
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            token_repo = RefreshTokenRepository(session)
+            service = PasswordResetService(
+                jwt_manager=self._jwt,
+                user_repo=user_repo,
+                password_manager=self._password_manager,
+                token_repo=token_repo,
+                token_ttl_minutes=self._config.password_reset_token_ttl_minutes,
+            )
+            return await service.reset_password(token, new_password)
+
     async def cleanup_expired_users(self) -> int:
         """Hard-delete inactive users whose account expiry has passed."""
         async with self._db.session() as session:
@@ -717,6 +785,7 @@ class AuthManager:
             service = VerificationService(
                 jwt_manager=self._jwt,
                 user_repo=user_repo,
+                base_url=self._config.base_url,
             )
             return await service.verify(token)
 
@@ -729,6 +798,7 @@ class AuthManager:
                 user_repo=user_repo,
                 email_sender=self._email_sender,
                 token_ttl_minutes=self._verification_token_ttl,
+                base_url=self._config.base_url,
             )
             return await service.send_verification(user_id)
 

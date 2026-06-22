@@ -150,6 +150,13 @@ class RoleService:
         await self._role_repo.create(role_id=role.id, resource=resource, action=action)
         return True
 
+    async def remove_permission(self, role_name: str, resource: str, action: str) -> bool:
+        """Remove a permission from a role."""
+        role = await self._role_repo.get_by_name(role_name)
+        if role is None:
+            return False
+        return await self._role_repo.remove_permission(role.id, resource, action)
+
     async def get_user_permissions(self, user_id: uuid.UUID) -> list[str]:
         """Get all permission strings for a user."""
         return await self._role_repo.get_permissions(user_id)
