@@ -18,6 +18,18 @@ SUPERUSER_EMAIL = "super@test.com"
 SUPERUSER_PASSWORD = "SuperSecret123!"  # noqa: S105
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _integration_db(
+    _ensure_tables: None,
+    _clean_tables: None,
+) -> None:
+    """Ensure database tables exist and are clean for each integration test.
+
+    ``_ensure_tables`` (session-scoped) creates schemas and tables once.
+    ``_clean_tables`` (function-scoped) truncates all data before each test.
+    """
+
+
 @pytest_asyncio.fixture
 async def app(auth_manager: AuthManager) -> FastAPI:
     """Create a FastAPI app for testing."""

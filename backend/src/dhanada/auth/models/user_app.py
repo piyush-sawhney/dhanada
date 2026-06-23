@@ -39,6 +39,7 @@ class UserApp(BaseModel):
 
     user: Mapped["User"] = relationship(
         "User",
+        foreign_keys=[user_id],
         back_populates="user_app_links",
     )
     app: Mapped["App"] = relationship(

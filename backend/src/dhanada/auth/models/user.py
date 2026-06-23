@@ -94,6 +94,7 @@ class User(BaseModel):
     # Relationships
     user_app_links: Mapped[list["UserApp"]] = relationship(
         "UserApp",
+        foreign_keys="UserApp.user_id",
         back_populates="user",
         lazy="selectin",
         cascade="all, delete-orphan",
@@ -101,6 +102,7 @@ class User(BaseModel):
     apps: AssociationProxy[list["App"]] = association_proxy("user_app_links", "app")
     user_role_links: Mapped[list["UserRole"]] = relationship(
         "UserRole",
+        foreign_keys="UserRole.user_id",
         back_populates="user",
         lazy="selectin",
         cascade="all, delete-orphan",
@@ -114,6 +116,7 @@ class User(BaseModel):
     )
     totp_secret: Mapped[Optional["TOTPSecret"]] = relationship(
         "TOTPSecret",
+        foreign_keys="TOTPSecret.user_id",
         back_populates="user",
         uselist=False,
         lazy="selectin",
@@ -121,6 +124,7 @@ class User(BaseModel):
     )
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         "RefreshToken",
+        foreign_keys="RefreshToken.user_id",
         back_populates="user",
         lazy="selectin",
         cascade="all, delete-orphan",

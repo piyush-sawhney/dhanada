@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -22,6 +23,7 @@ from dhanada.auth.models import Base
 from dhanada.auth.models.user import User
 from dhanada.crm.services import ClientService, DocumentService
 
+load_dotenv()
 
 # Test configuration constants
 def _generate_test_kek():
@@ -88,27 +90,59 @@ def _test_database_url() -> Generator[str, Any, None]:
 
 
 @pytest_asyncio.fixture(scope="session")
-async def db_session(
+async def _ensure_tables(
     _test_database_url: str,
-) -> AsyncGenerator[AsyncSession, None]:
-    """Create a test database session with clean tables."""
+) -> AsyncGenerator[None, None]:
+    """Create schemas and tables once per session.
+
+    Not autouse — only fires when requested by a downstream conftest
+    or by ``db_session``. This avoids connecting to the database for
+    unit tests that do not need it.
+    """
     engine = create_async_engine(_test_database_url)
     async with engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS crm"))
-        await conn.commit()
         await conn.run_sync(Base.metadata.create_all)
-
-    db = DatabaseSession(_test_database_url)
-    async with db.session() as session:
-        yield session
-
+    yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.execute(text("DROP SCHEMA IF EXISTS auth CASCADE"))
         await conn.execute(text("DROP SCHEMA IF EXISTS crm CASCADE"))
-        await conn.commit()
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def _clean_tables(
+    _test_database_url: str,
+) -> AsyncGenerator[None, None]:
+    """Truncate all tables before each test for isolation.
+
+    Not autouse — only fires when requested by a downstream conftest.
+    This avoids connecting to the database for unit tests that do not
+    need it.
+    """
+    engine = create_async_engine(_test_database_url)
+    async with engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
+    await engine.dispose()
+    yield
+
+
+@pytest_asyncio.fixture(scope="session")
+async def db_session(
+    _test_database_url: str,
+    _ensure_tables: None,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Create a test database session with clean tables.
+
+    Depends on ``_ensure_tables`` so that schemas and tables exist
+    before the session is created.
+    """
+    db = DatabaseSession(_test_database_url)
+    async with db.session() as session:
+        yield session
 
 
 @pytest.fixture

@@ -22,7 +22,7 @@ class TestTOTPManager:
         secret = totp_manager.generate_secret()
         uri = totp_manager.get_provisioning_uri(secret, "test@example.com")
         assert uri.startswith("otpauth://totp/")
-        assert "test@example.com" in uri
+        assert "test%40example.com" in uri
         assert "Dhanada Test" in uri or "Dhanada" in uri
 
     def test_verify_valid_token(self, totp_manager):

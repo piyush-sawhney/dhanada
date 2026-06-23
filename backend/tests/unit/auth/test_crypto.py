@@ -13,7 +13,7 @@ class TestKEKManager:
     def test_generate_returns_32_bytes(self):
         """Generated KEK should be exactly 32 bytes."""
         mgr, b64 = KEKManager.generate()
-        assert len(mgr.kek) == 32
+        assert len(mgr.current_key) == 32
         assert isinstance(b64, str)
         assert len(b64) > 0
 
@@ -21,7 +21,7 @@ class TestKEKManager:
         """Loading KEK from valid base64 should succeed."""
         _, b64 = KEKManager.generate()
         mgr = KEKManager.from_env(b64)
-        assert len(mgr.kek) == 32
+        assert len(mgr.current_key) == 32
 
     def test_from_env_invalid_not_base64(self):
         """Loading KEK from invalid base64 should raise."""

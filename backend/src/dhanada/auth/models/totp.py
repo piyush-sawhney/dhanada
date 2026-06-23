@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,7 +27,7 @@ class TOTPSecret(BaseModel):
 
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("auth.users.id", ondelete="CASCADE"),
         unique=True,
         index=True,
         nullable=False,
@@ -50,7 +50,7 @@ class TOTPSecret(BaseModel):
         comment="Data Encryption Key encrypted with KEK",
     )
     encryption_key_id: Mapped[str] = mapped_column(
-        Text(50),
+        String(50),
         nullable=False,
         default="kek_0",
         server_default="kek_0",
@@ -97,6 +97,7 @@ class TOTPSecret(BaseModel):
 
     user: Mapped["User"] = relationship(
         "User",
+        foreign_keys=[user_id],
         back_populates="totp_secret",
     )
 

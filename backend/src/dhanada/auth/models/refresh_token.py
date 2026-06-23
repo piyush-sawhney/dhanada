@@ -26,7 +26,7 @@ class RefreshToken(BaseModel):
 
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("auth.users.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )
@@ -74,6 +74,7 @@ class RefreshToken(BaseModel):
 
     user: Mapped["User"] = relationship(
         "User",
+        foreign_keys=[user_id],
         back_populates="refresh_tokens",
     )
 

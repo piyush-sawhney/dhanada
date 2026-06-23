@@ -32,6 +32,7 @@ class UserRole(BaseModel):
 
     user: Mapped["User"] = relationship(
         "User",
+        foreign_keys=[user_id],
         back_populates="user_role_links",
     )
     role: Mapped["Role"] = relationship(
@@ -86,7 +87,7 @@ class RolePermission(BaseModel):
 
     role_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("roles.id", ondelete="CASCADE"),
+        ForeignKey("auth.roles.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )
