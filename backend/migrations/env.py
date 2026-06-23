@@ -20,10 +20,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-database_url = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada",
-)
+database_url = os.environ["DATABASE_URL"]
 config.set_main_option("sqlalchemy.url", database_url)
 
 

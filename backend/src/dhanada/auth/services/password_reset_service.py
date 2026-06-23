@@ -32,9 +32,9 @@ class PasswordResetService:
         user_repo: UserRepository,
         password_manager: PasswordManager,
         token_repo: RefreshTokenRepository,
+        base_url: str,
+        token_ttl_minutes: int,
         email_sender: EmailSender | None = None,
-        base_url: str = "http://localhost:8000",
-        token_ttl_minutes: int = 60,
     ) -> None:
         self._jwt = jwt_manager
         self._user_repo = user_repo

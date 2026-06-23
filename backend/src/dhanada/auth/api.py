@@ -778,6 +778,7 @@ class AuthManager:
                 user_repo=user_repo,
                 password_manager=self._password_manager,
                 token_repo=token_repo,
+                base_url=self._config.base_url,
                 token_ttl_minutes=self._config.password_reset_token_ttl_minutes,
             )
             return await service.reset_password(token, new_password)
@@ -797,6 +798,7 @@ class AuthManager:
                 jwt_manager=self._jwt,
                 user_repo=user_repo,
                 base_url=self._config.base_url,
+                token_ttl_minutes=self._verification_token_ttl,
             )
             return await service.verify(token)
 

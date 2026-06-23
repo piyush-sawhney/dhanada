@@ -9,8 +9,10 @@ from httpx import ASGITransport, AsyncClient
 from dhanada.auth.api import AuthManager
 from dhanada.auth.db.repository import RefreshTokenRepository, UserRepository
 from dhanada.auth.db.session import DatabaseSession
+from dhanada.auth.fastapi.dependencies import get_auth_manager
 from dhanada.auth.fastapi.router import auth_router
 from dhanada.auth.services.token_service import TokenService
+from dhanada.crm.fastapi.router import crm_router
 
 SUPERUSER_EMAIL = "super@test.com"
 SUPERUSER_PASSWORD = "SuperSecret123!"  # noqa: S105
@@ -20,7 +22,13 @@ SUPERUSER_PASSWORD = "SuperSecret123!"  # noqa: S105
 async def app(auth_manager: AuthManager) -> FastAPI:
     """Create a FastAPI app for testing."""
     application = FastAPI()
+
+    async def _override_auth_manager():
+        yield auth_manager
+
+    application.dependency_overrides[get_auth_manager] = _override_auth_manager
     application.include_router(auth_router, prefix="/api/auth")
+    application.include_router(crm_router)
     application.state.auth_manager = auth_manager
     return application
 

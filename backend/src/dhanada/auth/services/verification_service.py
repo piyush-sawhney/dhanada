@@ -24,9 +24,9 @@ class VerificationService:
         self,
         jwt_manager: JWTManager,
         user_repo: UserRepository,
+        base_url: str,
+        token_ttl_minutes: int,
         email_sender: EmailSender | None = None,
-        base_url: str = "http://localhost:8000",
-        token_ttl_minutes: int = 1440,
     ) -> None:
         self._jwt = jwt_manager
         self._user_repo = user_repo

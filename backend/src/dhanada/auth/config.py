@@ -16,8 +16,7 @@ class AuthConfig(BaseSettings):
 
     # Database
     database_url: PostgresDsn = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada",  # type: ignore[assignment]
-        description="PostgreSQL connection URL",
+        description="PostgreSQL connection URL (set DHANADA_AUTH_DATABASE_URL in .env)",
     )
 
     # JWT Configuration

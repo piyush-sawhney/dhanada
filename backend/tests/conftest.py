@@ -29,10 +29,20 @@ def _generate_test_kek():
     return b64, mgr
 
 
-TEST_DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada_test",
-)
+def _get_database_url() -> str:
+    """Resolve the test database URL.
+
+    Priority:
+    1. ``TEST_DATABASE_URL`` env var → user-provided connection string.
+    2. Fallback to ``localhost:5432/dhanada_test``.
+    """
+    return os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/dhanada_test",
+    )
+
+
+TEST_DATABASE_URL = _get_database_url()
 
 TEST_JWT_SECRET = "test-secret-key-for-unit-tests-min-32-char!"  # noqa: S105
 TEST_KEK_BASE64, TEST_KEK_MANAGER = _generate_test_kek()
@@ -47,17 +57,49 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, Any, None]:
     loop.close()
 
 
+@pytest.fixture(scope="session")
+def _test_database_url() -> Generator[str, Any, None]:
+    """Provide the database URL, optionally via testcontainers.
+
+    Set ``TESTCONTAINERS=1`` or run in CI to automatically start a disposable
+    PostgreSQL 16 container instead of using a pre-configured database.
+
+    Requires ``testcontainers`` (dev dependency) and Docker.
+    """
+    if not (os.getenv("TESTCONTAINERS") or os.getenv("CI")):
+        yield _get_database_url()
+        return
+
+    try:
+        from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
+    except ImportError:
+        msg = (
+            "TESTCONTAINERS=1 or CI=true requires the testcontainers package. "
+            "Install it with: pip install testcontainers"
+        )
+        raise RuntimeError(msg) from None  # noqa: TRY004
+
+    container = PostgresContainer("postgres:16-alpine")
+    container.start()
+    sync_url = container.get_connection_url()
+    async_url = sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    yield async_url
+    container.stop()
+
+
 @pytest_asyncio.fixture(scope="session")
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
+async def db_session(
+    _test_database_url: str,
+) -> AsyncGenerator[AsyncSession, None]:
     """Create a test database session with clean tables."""
-    engine = create_async_engine(TEST_DATABASE_URL)
+    engine = create_async_engine(_test_database_url)
     async with engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS crm"))
         await conn.commit()
         await conn.run_sync(Base.metadata.create_all)
 
-    db = DatabaseSession(TEST_DATABASE_URL)
+    db = DatabaseSession(_test_database_url)
     async with db.session() as session:
         yield session
 
@@ -153,7 +195,7 @@ async def client_service(auth_manager: AuthManager) -> ClientService:
         yield ClientService(
             session=session,
             auth=auth_manager,
-            envelope=auth_manager._envelope,
+            envelope=auth_manager.envelope,
         )
 
 
@@ -167,7 +209,7 @@ async def document_service(auth_manager: AuthManager) -> DocumentService:
         yield DocumentService(
             session=session,
             auth=auth_manager,
-            envelope=auth_manager._envelope,
+            envelope=auth_manager.envelope,
         )
 
 
