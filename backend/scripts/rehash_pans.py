@@ -61,7 +61,8 @@ def main() -> None:
     print(f"  Dry run:  {args.dry_run}")
     print()
 
-    engine = sa.create_engine(database_url)
+    sync_url = database_url.replace("+asyncpg", "")
+    engine = sa.create_engine(sync_url)
 
     with engine.connect() as conn:
         rows = conn.execute(

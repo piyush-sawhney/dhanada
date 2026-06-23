@@ -81,3 +81,7 @@ class SuperuserAlreadyExistsError(AuthError):
 
 class CannotDeleteSystemRoleError(AuthError):
     """Cannot delete a system-protected role."""
+
+
+class ValidationError(AuthError):
+    """Input validation error."""

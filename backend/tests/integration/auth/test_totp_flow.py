@@ -3,8 +3,6 @@
 import pytest
 from httpx import AsyncClient
 
-from dhanada.auth.api import AuthManager
-
 pytestmark = pytest.mark.asyncio
 
 
@@ -17,7 +15,7 @@ class TestTOTPFlow:
 
     @pytest.fixture(autouse=True)
     async def setup_totp_user(
-        self, auth_manager: AuthManager, superuser_token: str, client: AsyncClient  # noqa: ARG002
+        self, superuser_token: str, client: AsyncClient
     ):
         """Create an active user for TOTP testing."""
         resp = await client.post(
@@ -30,10 +28,11 @@ class TestTOTPFlow:
             },
         )
         assert resp.status_code == 201
+        register_data = resp.json()
 
         login_resp = await client.post(
             "/api/auth/login",
-            json={"email": self.TOTP_EMAIL, "password": self.TOTP_PASSWORD},
+            json={"email": self.TOTP_EMAIL, "password": register_data["temporary_password"]},
         )
         data = login_resp.json()
         self._setup_token = data["setup_token"]
@@ -44,7 +43,7 @@ class TestTOTPFlow:
         )
         self._totp_data = totp_resp.json()
 
-    async def test_enable_totp_returns_secret(self, client: AsyncClient):  # noqa: ARG002
+    async def test_enable_totp_returns_secret(self):
         """POST /totp/enable should return secret and provisioning URI."""
         assert "secret" in self._totp_data
         assert "provisioning_uri" in self._totp_data

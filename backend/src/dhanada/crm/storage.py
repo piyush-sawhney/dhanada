@@ -41,7 +41,10 @@ class LocalFileStorage(StorageBackend):
         self._base = Path(base_path)
 
     def _resolve(self, path: str) -> Path:
-        return self._base / path
+        resolved = (self._base / path).resolve()
+        if not resolved.is_relative_to(self._base.resolve()):
+            raise ValueError(f"Path traversal denied: {path}")
+        return resolved
 
     def _path_for(self, document_id: UUID, side: str) -> tuple[Path, str]:
         did = str(document_id)

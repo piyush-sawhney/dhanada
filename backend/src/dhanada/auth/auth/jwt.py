@@ -74,6 +74,11 @@ class JWTManager:
         self._access_expire = timedelta(minutes=access_token_expire_minutes)
         self._refresh_expire = timedelta(days=refresh_token_expire_days)
 
+    @property
+    def refresh_token_expiry(self) -> timedelta:
+        """Refresh token lifetime as a timedelta."""
+        return self._refresh_expire
+
     def create_access_token(
         self,
         user_id: uuid.UUID,

@@ -4,7 +4,6 @@ import pytest
 from httpx import AsyncClient
 
 from dhanada.auth.api import AuthManager
-from dhanada.auth.models.user import User
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,8 +58,9 @@ class TestBootstrapFlow:
         assert data["user"]["email"] == "bootstrap@test.com"
         assert data["user"]["is_superuser"] is True
 
+    @pytest.mark.usefixtures("superuser")
     async def test_bootstrap_fails_when_users_exist(
-        self, client: AsyncClient, superuser: User  # noqa: ARG002
+        self, client: AsyncClient
     ):
         """POST /bootstrap should fail with 409 when users already exist."""
         resp = await client.post(
@@ -121,7 +121,7 @@ class TestRefreshFlow:
     """Tests for token refresh flow."""
 
     async def test_refresh_with_valid_token(
-        self, client: AsyncClient, superuser_token: str, auth_manager: AuthManager  # noqa: ARG002
+        self, client: AsyncClient, auth_manager: AuthManager
     ):
         """POST /refresh with valid refresh token should return new tokens."""
         from dhanada.auth.db.repository import RefreshTokenRepository, UserRepository
@@ -163,7 +163,7 @@ class TestLogoutFlow:
     """Tests for logout flows."""
 
     async def test_logout_revokes_token(
-        self, client: AsyncClient, superuser_token: str, auth_manager: AuthManager  # noqa: ARG002
+        self, client: AsyncClient, auth_manager: AuthManager
     ):
         """POST /logout should revoke the refresh token."""
         from dhanada.auth.db.repository import RefreshTokenRepository, UserRepository

@@ -32,7 +32,7 @@ class TestEmailVerification:
         assert "sent" in data
 
     async def test_verify_email_with_valid_token(
-        self, client: AsyncClient, superuser_token: str, auth_manager: AuthManager  # noqa: ARG002
+        self, client: AsyncClient, auth_manager: AuthManager
     ):
         """GET /verify-email with valid token should verify email."""
         from dhanada.auth.db.repository import UserRepository

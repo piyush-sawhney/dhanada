@@ -192,3 +192,47 @@ class AuditService:
             ip_address=ip_address,
             detail={"role_id": role_id},
         )
+
+    @staticmethod
+    def role_updated(
+        role_name: str,
+        changes: dict | None = None,
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        AuditService.log(
+            "role_updated",
+            actor_id=actor_id,
+            ip_address=ip_address,
+            detail={"role_name": role_name, "changes": changes or {}},
+        )
+
+    @staticmethod
+    def permission_added(
+        role_name: str,
+        resource: str,
+        action: str,
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        AuditService.log(
+            "permission_added",
+            actor_id=actor_id,
+            ip_address=ip_address,
+            detail={"role_name": role_name, "resource": resource, "action": action},
+        )
+
+    @staticmethod
+    def permission_removed(
+        role_name: str,
+        resource: str,
+        action: str,
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        AuditService.log(
+            "permission_removed",
+            actor_id=actor_id,
+            ip_address=ip_address,
+            detail={"role_name": role_name, "resource": resource, "action": action},
+        )

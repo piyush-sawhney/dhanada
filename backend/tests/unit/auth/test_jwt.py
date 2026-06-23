@@ -59,13 +59,10 @@ class TestJWTManager:
         """Using an access token as refresh token should fail."""
         user_id = uuid.uuid4()
         token = jwt_manager.create_access_token(user_id)
-        with pytest.raises(InvalidTokenError, match="not an access token"):
-            jwt_manager.verify_access_token(token)
-        # Actually, it will fail because type is "access", not "refresh"
-        with pytest.raises(InvalidTokenError, match="not an refresh token"):
-            jwt_manager.verify_refresh_token(token)
-        # Actually, let me re-check - verify_refresh_token checks type != "refresh"
-        # so an access token used as refresh should fail
+        # Access token verifies successfully with verify_access_token
+        payload = jwt_manager.verify_access_token(token)
+        assert payload.type == "access"
+        # But fails with verify_refresh_token because type is "access", not "refresh"
         with pytest.raises(InvalidTokenError, match="not a refresh token"):
             jwt_manager.verify_refresh_token(token)
 

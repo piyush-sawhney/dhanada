@@ -1,6 +1,5 @@
 """CRM models — Client with encrypted PAN and Documents."""
 
-import re
 from datetime import date, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Optional
@@ -14,8 +13,6 @@ from dhanada.auth.models.base import Base, TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from dhanada.auth.models.user import User
-
-PAN_PATTERN = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
 
 
 class DocumentType(StrEnum):
@@ -276,11 +273,3 @@ class Document(CRMBaseModel):
 
     def __repr__(self) -> str:
         return f"<Document(id={self.id}, type={self.document_type})>"
-
-
-def normalize_pan(pan: str) -> str:
-    return pan.upper().strip()
-
-
-def validate_pan(pan: str) -> bool:
-    return bool(PAN_PATTERN.match(normalize_pan(pan)))

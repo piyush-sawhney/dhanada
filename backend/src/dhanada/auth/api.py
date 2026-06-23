@@ -575,6 +575,11 @@ class AuthManager:
     def config(self) -> AuthConfig:
         return self._config
 
+    @property
+    def envelope(self) -> EnvelopeEncryption:
+        """Public access to the envelope encryption instance."""
+        return self._envelope
+
     async def _create_tokens(
         self,
         user: User,

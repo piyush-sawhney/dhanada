@@ -2,27 +2,15 @@
 
 import asyncio
 import os
-import sys
-import types
 from logging.config import fileConfig
 
+from alembic import context
 from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from alembic import context
-
 import dhanada.auth.models  # noqa: F401 - register all auth models with Base.metadata
-
-# Pre-seed sys.modules to prevent dhanada.crm.__init__ from executing
-# (it triggers a chain that imports buggy code in crm.services)
-_crm_stub = types.ModuleType("dhanada.crm")
-_crm_stub.__path__ = [os.path.join(os.path.dirname(__file__), "..", "src", "dhanada", "crm")]
-_crm_stub.__package__ = "dhanada.crm"
-sys.modules["dhanada.crm"] = _crm_stub
-
 import dhanada.crm.models  # noqa: F401 - register all crm models with Base.metadata
-
 from dhanada.auth.models import Base
 
 config = context.config
@@ -39,7 +27,7 @@ database_url = os.getenv(
 config.set_main_option("sqlalchemy.url", database_url)
 
 
-def include_name(name: str, type_: str, parent_names: dict) -> bool:
+def include_name(name: str, type_: str, _parent_names: dict) -> bool:
     """Include all known schema tables in migration autogenerate."""
     if type_ == "schema":
         return name in ("auth", "crm")

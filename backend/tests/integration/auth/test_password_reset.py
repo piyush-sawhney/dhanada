@@ -24,8 +24,9 @@ class TestPasswordReset:
         data = resp.json()
         assert data["sent"] is True
 
+    @pytest.mark.usefixtures("superuser")
     async def test_forgot_password_with_valid_email(
-        self, client: AsyncClient, superuser: object  # noqa: ARG002
+        self, client: AsyncClient
     ):
         """POST /forgot-password with valid email should return success."""
         resp = await client.post(
@@ -49,8 +50,9 @@ class TestPasswordReset:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.usefixtures("superuser")
     async def test_reset_password_with_valid_token(
-        self, client: AsyncClient, auth_manager: AuthManager, superuser: object  # noqa: ARG002
+        self, client: AsyncClient, auth_manager: AuthManager
     ):
         """POST /reset-password with valid token should reset password."""
         from dhanada.auth.db.repository import UserRepository
@@ -70,8 +72,9 @@ class TestPasswordReset:
         data = resp.json()
         assert data["success"] is True
 
+    @pytest.mark.usefixtures("superuser")
     async def test_reset_password_token_is_single_use(
-        self, client: AsyncClient, auth_manager: AuthManager, superuser: object  # noqa: ARG002
+        self, client: AsyncClient, auth_manager: AuthManager
     ):
         """Reset token should be single-use - second attempt should fail."""
         from dhanada.auth.db.repository import UserRepository
@@ -89,3 +92,12 @@ class TestPasswordReset:
             json={"token": token, "new_password": "AnotherPass123!"},
         )
         assert resp1.status_code == 200
+        data1 = resp1.json()
+        assert data1["success"] is True
+
+        # Second attempt with same token should fail
+        resp2 = await client.post(
+            "/api/auth/reset-password",
+            json={"token": token, "new_password": "YetAnotherPass456!"},
+        )
+        assert resp2.status_code == 400

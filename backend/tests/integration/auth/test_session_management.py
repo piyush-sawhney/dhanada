@@ -62,14 +62,33 @@ class TestSessionListing:
         assert resp.status_code == 404
 
     async def test_non_superuser_cannot_list_other_sessions(
-        self, client: AsyncClient, superuser_token: str
+        self, client: AsyncClient, auth_manager: AuthManager
     ):
         """Non-superusers should not be able to list other users' sessions."""
         from uuid import UUID
 
+        import dhanada.auth.db.repository as repo
+        import dhanada.auth.db.session as db_session
+
+        db = db_session.DatabaseSession(str(auth_manager.config.database_url))
+        async with db.session() as session:
+            # Create a regular non-superuser
+            user_repo = repo.UserRepository(session)
+            regular_user = await user_repo.create(
+                email="regular@test.com",
+                username="regular",
+                password_hash=auth_manager._password_manager.hash_password("RegularPass123!"),
+                full_name="Regular User",
+                is_active=True,
+                is_superuser=False,
+            )
+            await session.commit()
+
+        token = auth_manager._jwt.create_access_token(regular_user.id, roles=["user"])
+
         resp = await client.get(
             f"/api/auth/admin/users/{UUID(int=0)}/sessions",
-            headers={"Authorization": f"Bearer {superuser_token}"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 404
 

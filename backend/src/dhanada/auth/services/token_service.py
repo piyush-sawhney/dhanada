@@ -86,7 +86,7 @@ class TokenService:
             family_id=family_id,
             user_agent=user_agent,
             ip_address=ip_address,
-            expires_at=datetime.now(UTC) + self._jwt_manager._refresh_expire,
+            expires_at=datetime.now(UTC) + self._jwt_manager.refresh_token_expiry,
         )
 
         return TokenResult(
@@ -182,7 +182,7 @@ class TokenService:
             parent_token_hash=token_hash,
             user_agent=user_agent,
             ip_address=ip_address,
-            expires_at=datetime.now(UTC) + self._jwt_manager._refresh_expire,
+            expires_at=datetime.now(UTC) + self._jwt_manager.refresh_token_expiry,
         )
 
         return TokenResult(
@@ -212,14 +212,16 @@ class TokenService:
         tokens = await self._token_repo.get_active_by_user(user_id)
         sessions = []
         for token in tokens:
-            sessions.append({
-                "id": str(token.id),
-                "family_id": str(token.family_id),
-                "user_agent": token.user_agent,
-                "ip_address": token.ip_address,
-                "created_at": token.created_at.isoformat(),
-                "expires_at": token.expires_at.isoformat(),
-            })
+            sessions.append(
+                {
+                    "id": str(token.id),
+                    "family_id": str(token.family_id),
+                    "user_agent": token.user_agent,
+                    "ip_address": token.ip_address,
+                    "created_at": token.created_at.isoformat(),
+                    "expires_at": token.expires_at.isoformat(),
+                }
+            )
         return sessions
 
     def _hash_token(self, token: str) -> str:

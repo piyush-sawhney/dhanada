@@ -159,7 +159,7 @@ class RoleService:
         role = await self._role_repo.get_by_name(role_name)
         if role is None:
             return False
-        await self._role_repo.create(role_id=role.id, resource=resource, action=action)
+        await self._role_repo.add_permission(role.id, resource, action)
         return True
 
     async def remove_permission(self, role_name: str, resource: str, action: str) -> bool:

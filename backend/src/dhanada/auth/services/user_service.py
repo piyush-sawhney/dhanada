@@ -11,6 +11,7 @@ from dhanada.auth.exceptions import (
     InvalidCredentialsError,
     UserAlreadyExistsError,
     UserNotFoundError,
+    ValidationError,
 )
 from dhanada.auth.models.user import User
 
@@ -49,6 +50,12 @@ class UserService:
         created_by_id: uuid.UUID | None = None,
     ) -> User:
         """Register a new user."""
+        if not password:
+            raise ValidationError(
+                "Password is required",
+                hint="Provide a non-empty password",
+            )
+
         existing_email = await self._user_repo.get_by_email(email)
         if existing_email is not None:
             raise UserAlreadyExistsError(
@@ -138,7 +145,8 @@ class UserService:
         if not self._password_manager.verify_password(password, user.password_hash):
             await self._user_repo.increment_failed_attempts(user.id)
             user = await self._user_repo.get(user.id)
-            assert user is not None
+            if user is None:
+                raise RuntimeError("Failed to retrieve user after incrementing failed attempts")
             if user.failed_login_attempts >= self._lockout_threshold:
                 await self._user_repo.lock_account(user.id, self._lockout_minutes)
                 raise AccountLockedError(

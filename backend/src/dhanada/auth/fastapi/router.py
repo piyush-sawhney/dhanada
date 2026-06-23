@@ -76,6 +76,22 @@ from dhanada.auth.rate_limit import limiter
 auth_router = APIRouter(tags=["auth"])
 
 
+def _user_to_response(user: User) -> UserResponse:
+    """Convert a User model to a UserResponse schema."""
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        is_superuser=user.is_superuser,
+        email_verified=user.email_verified,
+        roles=[r.name for r in user.roles],
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
 def _get_client_info(request: Request) -> tuple[str | None, str | None]:
     """Extract client IP and user agent from request."""
     user_agent = request.headers.get("user-agent")
@@ -166,18 +182,7 @@ async def bootstrap(
         user_agent, ip_address = _get_client_info(request)
         tokens = await auth._create_tokens(user, user_agent, ip_address)
         return BootstrapCompleteResponse(
-            user=UserResponse(
-                id=user.id,
-                email=user.email,
-                username=user.username,
-                full_name=user.full_name,
-                is_active=user.is_active,
-                is_superuser=user.is_superuser,
-                email_verified=user.email_verified,
-                roles=[r.name for r in user.roles],
-                created_at=user.created_at,
-                updated_at=user.updated_at,
-            ),
+            user=_user_to_response(user),
             access_token=tokens.access_token,
             refresh_token=tokens.refresh_token,
             token_type=tokens.token_type,
@@ -399,18 +404,7 @@ async def get_me(
 ) -> UserResponse:
     """Get current user profile."""
     user = await auth.get_user(user.id)
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        username=user.username,
-        full_name=user.full_name,
-        is_active=user.is_active,
-        is_superuser=user.is_superuser,
-        email_verified=user.email_verified,
-        roles=[r.name for r in user.roles],
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+    return _user_to_response(user)
 
 
 @auth_router.patch(
@@ -432,18 +426,7 @@ async def update_me(
             username=body.username,
             current_user_id=user.id,
         )
-        return UserResponse(
-            id=updated.id,
-            email=updated.email,
-            username=updated.username,
-            full_name=updated.full_name,
-            is_active=updated.is_active,
-            is_superuser=updated.is_superuser,
-            email_verified=updated.email_verified,
-            roles=[r.name for r in updated.roles],
-            created_at=updated.created_at,
-            updated_at=updated.updated_at,
-        )
+        return _user_to_response(updated)
     except UserAlreadyExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
 
@@ -511,7 +494,7 @@ async def verify_totp(
     request: Request,  # noqa: ARG001
     user: User = Depends(get_setup_or_active_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Verify and confirm TOTP enrollment.
 
     Works with both a regular JWT (active user) and a setup token (first-time flow).
@@ -534,7 +517,7 @@ async def disable_totp(
     request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Disable TOTP two-factor authentication."""
     try:
         disabled = await auth.disable_totp(user.id, body.token)
@@ -552,7 +535,7 @@ async def generate_backup_codes(
     request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Generate new backup codes (invalidates old ones)."""
     codes = await auth.generate_backup_codes(user.id)
     return {"backup_codes": codes}
@@ -568,7 +551,7 @@ async def assign_role(
     user: User = Depends(get_current_user),  # noqa: B008
     _: object = Depends(require_permission("roles", "assign")),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Assign a role to a user. Requires roles:assign permission."""
     assigned = await auth.assign_role(
         user_id,
@@ -634,18 +617,7 @@ async def get_user(
     """Get a user by ID. Requires users:read permission."""
     try:
         user = await auth.get_user(user_id)
-        return UserResponse(
-            id=user.id,
-            email=user.email,
-            username=user.username,
-            full_name=user.full_name,
-            is_active=user.is_active,
-            is_superuser=user.is_superuser,
-            email_verified=user.email_verified,
-            roles=[r.name for r in user.roles],
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-        )
+        return _user_to_response(user)
     except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -784,21 +756,7 @@ async def list_users(
     """List all users with pagination and optional search. Requires superuser."""
     users, total = await auth.search_users(search, page, per_page)
     return UserListResponse(
-        users=[
-            UserResponse(
-                id=u.id,
-                email=u.email,
-                username=u.username,
-                full_name=u.full_name,
-                is_active=u.is_active,
-                is_superuser=u.is_superuser,
-                email_verified=u.email_verified,
-                roles=[r.name for r in u.roles],
-                created_at=u.created_at,
-                updated_at=u.updated_at,
-            )
-            for u in users
-        ],
+        users=[_user_to_response(u) for u in users],
         total=total,
         page=page,
         per_page=per_page,
@@ -826,18 +784,7 @@ async def admin_update_user(
             is_active=body.is_active,
             current_user_id=user.id,
         )
-        return UserResponse(
-            id=updated.id,
-            email=updated.email,
-            username=updated.username,
-            full_name=updated.full_name,
-            is_active=updated.is_active,
-            is_superuser=updated.is_superuser,
-            email_verified=updated.email_verified,
-            roles=[r.name for r in updated.roles],
-            created_at=updated.created_at,
-            updated_at=updated.updated_at,
-        )
+        return _user_to_response(updated)
     except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -950,7 +897,7 @@ async def revoke_role(
     _user: User = Depends(get_current_user),  # noqa: B008
     _: object = Depends(require_permission("roles", "assign")),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Revoke a role from a user. Requires roles:assign permission."""
     revoked = await auth.revoke_role(user_id, body.role_name)
     if not revoked:
@@ -970,7 +917,7 @@ async def delete_role(
     role_id: UUID,
     user: User = Depends(require_superuser),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Delete a role. Cannot delete system roles. Requires superuser."""
     try:
         deleted = await auth.delete_role(role_id, current_user_id=user.id)
@@ -1025,7 +972,7 @@ async def add_permission_to_role(
     body: AddPermissionRequest,
     _user: User = Depends(require_superuser),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-    ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """Add a permission to a role. Requires superuser."""
     added = await auth.add_permission_to_role(role_name, body.resource, body.action)
     if not added:

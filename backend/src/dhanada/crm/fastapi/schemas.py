@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
@@ -12,7 +11,8 @@ from pydantic import BaseModel, Field, field_validator
 if TYPE_CHECKING:
     from dhanada.crm.models import Document
 
-PAN_PATTERN = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+from dhanada.crm.pan import normalize_pan as _normalize_pan
+from dhanada.crm.pan import validate_pan as _validate_pan
 
 
 class ClientCreateRequest(BaseModel):
@@ -21,9 +21,9 @@ class ClientCreateRequest(BaseModel):
 
     @field_validator("pan")
     @classmethod
-    def validate_pan(cls, v: str) -> str:
-        normalized = v.upper().strip()
-        if not PAN_PATTERN.match(normalized):
+    def check_pan(cls, v: str) -> str:
+        normalized = _normalize_pan(v)
+        if not _validate_pan(normalized):
             raise ValueError("PAN must match format: AAAAA1234A (5 letters, 4 digits, 1 letter)")
         return normalized
 
@@ -37,9 +37,9 @@ class ClientPanUpdateRequest(BaseModel):
 
     @field_validator("pan")
     @classmethod
-    def validate_pan(cls, v: str) -> str:
-        normalized = v.upper().strip()
-        if not PAN_PATTERN.match(normalized):
+    def check_pan(cls, v: str) -> str:
+        normalized = _normalize_pan(v)
+        if not _validate_pan(normalized):
             raise ValueError("PAN must match format: AAAAA1234A (5 letters, 4 digits, 1 letter)")
         return normalized
 
@@ -78,8 +78,11 @@ class ClientListParams(BaseModel):
 class DocumentCreateRequest(BaseModel):
     client_id: UUID
     document_number: str | None = Field(None, max_length=100)
-    document_type: str = Field(..., max_length=50,
-        description="Document type label (e.g. pan_card, aadhaar, passport, will, poa)")
+    document_type: str = Field(
+        ...,
+        max_length=50,
+        description="Document type label (e.g. pan_card, aadhaar, passport, will, poa)",
+    )
     document_type_other: str | None = Field(None, max_length=255)
     is_id: bool = Field(
         True,

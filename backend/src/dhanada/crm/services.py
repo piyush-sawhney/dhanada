@@ -16,8 +16,12 @@ from dhanada.auth.crypto.envelope import EncryptedPayload, EnvelopeEncryption
 from dhanada.auth.exceptions import (
     UserNotFoundError,
 )
-from dhanada.crm.models import Client, Document, DocumentType, normalize_pan, validate_pan
+from dhanada.crm.models import Client, Document, DocumentType
+from dhanada.crm.pan import normalize_pan, validate_pan
 from dhanada.crm.storage import StorageBackend
+
+_ID_PHOTO_MAX_SIZE = 2 * 1024 * 1024  # 2 MB
+_ID_PHOTO_ALLOWED_MIMES = {"image/jpeg", "image/jpg", "image/png"}
 
 
 class ClientService:
@@ -62,12 +66,19 @@ class ClientService:
         return client
 
     async def list_all(
-        self, user_id: UUID, search: str | None = None, include_inactive: bool = False,
-        offset: int = 0, limit: int = 100,
+        self,
+        user_id: UUID,
+        search: str | None = None,
+        include_inactive: bool = False,
+        offset: int = 0,
+        limit: int = 100,
     ) -> tuple[list[Client], int]:
         await self._auth.assert_permission(user_id, "clients", "read")
         return await self._repo.list_all(
-            search=search, include_inactive=include_inactive, offset=offset, limit=limit,
+            search=search,
+            include_inactive=include_inactive,
+            offset=offset,
+            limit=limit,
         )
 
     async def update(self, user_id: UUID, client_id: UUID, name: str | None = None) -> Client:
@@ -175,7 +186,7 @@ class ClientService:
         perm = await self._auth.check_permission(user_id, "clients", "manage-pan")
         can_manage_pan = perm.allowed
 
-        clients, _ = await self._repo.list_all(include_inactive=False)
+        clients, _ = await self._repo.list_all(include_inactive=False, limit=10000)
         output = io.StringIO()
         writer = csv.writer(output)
         header = ["id", "name", "is_active", "created_at", "updated_at"]
@@ -220,8 +231,11 @@ class _ClientRepository:
         return result.scalar_one_or_none()
 
     async def list_all(
-        self, search: str | None = None, include_inactive: bool = False,
-        offset: int = 0, limit: int = 100,
+        self,
+        search: str | None = None,
+        include_inactive: bool = False,
+        offset: int = 0,
+        limit: int = 100,
     ) -> tuple[list[Client], int]:
         conditions = []
         if not include_inactive:
@@ -249,9 +263,7 @@ class _ClientRepository:
         return result.scalar_one()
 
     async def hard_delete(self, client_id: UUID) -> bool:
-        result = await self._session.execute(
-            delete(Client).where(Client.id == client_id)
-        )
+        result = await self._session.execute(delete(Client).where(Client.id == client_id))
         await self._session.flush()
         return cast(bool, result.rowcount > 0)
 
@@ -298,6 +310,18 @@ class DocumentService:
 
         if expiry_date and expiry_date <= issue_date:
             raise ValueError("expiry_date must be after issue_date")
+
+        if is_id:
+            if front_photo is not None:
+                if len(front_photo) > _ID_PHOTO_MAX_SIZE:
+                    raise ValueError("front_photo exceeds 2 MB limit")
+                if front_photo_mime and front_photo_mime not in _ID_PHOTO_ALLOWED_MIMES:
+                    raise ValueError("front_photo must be JPEG or PNG")
+            if back_photo is not None:
+                if len(back_photo) > _ID_PHOTO_MAX_SIZE:
+                    raise ValueError("back_photo exceeds 2 MB limit")
+                if back_photo_mime and back_photo_mime not in _ID_PHOTO_ALLOWED_MIMES:
+                    raise ValueError("back_photo must be JPEG or PNG")
 
         kwargs: dict[str, Any] = {
             "client_id": client_id,
@@ -368,7 +392,8 @@ class DocumentService:
         document_type: str | None = None,
         search: str | None = None,
         include_inactive: bool = False,
-        offset: int = 0, limit: int = 100,
+        offset: int = 0,
+        limit: int = 100,
     ) -> tuple[list[Document], int]:
         await self._auth.assert_permission(user_id, "documents", "read")
         conditions = []
@@ -381,8 +406,7 @@ class DocumentService:
         if search:
             pattern = f"%{search}%"
             conditions.append(
-                Document.document_number.ilike(pattern)
-                | Document.document_type.ilike(pattern)
+                Document.document_number.ilike(pattern) | Document.document_type.ilike(pattern)
             )
 
         count_query = select(func.count()).select_from(Document)
@@ -519,8 +543,7 @@ class DocumentService:
             return None
         if not all([doc.front_photo_nonce, doc.front_photo_dek, doc.front_photo_mime]):
             raise ValueError(
-                "Inconsistent encryption state: front photo data present "
-                "but missing nonce/DEK/MIME"
+                "Inconsistent encryption state: front photo data present but missing nonce/DEK/MIME"
             )
         payload = EncryptedPayload.from_components(
             ciphertext=ciphertext,

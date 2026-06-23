@@ -5,7 +5,17 @@ from collections.abc import AsyncGenerator
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 
 from dhanada.auth.api import AuthManager
@@ -13,6 +23,7 @@ from dhanada.auth.db.session import DatabaseSession
 from dhanada.auth.exceptions import PermissionDeniedError, UserNotFoundError
 from dhanada.auth.fastapi.dependencies import get_auth_manager, get_current_user
 from dhanada.auth.models.user import User
+from dhanada.auth.rate_limit import limiter
 from dhanada.crm.fastapi.schemas import (
     ClientCreateRequest,
     ClientDetailResponse,
@@ -40,14 +51,16 @@ async def get_client_service(
     db = DatabaseSession(str(auth.config.database_url))
     try:
         async with db.session() as session:
-            yield ClientService(session=session, auth=auth, envelope=auth._envelope)
+            yield ClientService(session=session, auth=auth, envelope=auth.envelope)
     finally:
         await db.close()
 
 
 @crm_router.post("/clients", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")
 async def create_client(
     body: ClientCreateRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
@@ -62,7 +75,9 @@ async def create_client(
 
 
 @crm_router.get("/clients", response_model=PaginatedResponse[ClientResponse])
+@limiter.limit("60/minute")
 async def list_clients(
+    request: Request,  # noqa: ARG001
     params: ClientListParams = Depends(),  # noqa: B008
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
@@ -85,8 +100,10 @@ async def list_clients(
 
 
 @crm_router.get("/clients/{client_id}", response_model=ClientResponse)
+@limiter.limit("60/minute")
 async def get_client(
     client_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
@@ -101,9 +118,11 @@ async def get_client(
 
 
 @crm_router.patch("/clients/{client_id}", response_model=ClientResponse)
+@limiter.limit("30/minute")
 async def update_client(
     client_id: UUID,
     body: ClientUpdateRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
@@ -118,8 +137,10 @@ async def update_client(
 
 
 @crm_router.delete("/clients/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/minute")
 async def delete_client(
     client_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> None:
@@ -132,8 +153,10 @@ async def delete_client(
 
 
 @crm_router.post("/clients/{client_id}/restore", response_model=ClientResponse)
+@limiter.limit("20/minute")
 async def restore_client(
     client_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
@@ -148,8 +171,10 @@ async def restore_client(
 
 
 @crm_router.delete("/clients/{client_id}/hard", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("10/minute")
 async def hard_delete_client(
     client_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> None:
@@ -162,8 +187,10 @@ async def hard_delete_client(
 
 
 @crm_router.get("/clients/{client_id}/pan", response_model=ClientDetailResponse)
+@limiter.limit("30/minute")
 async def get_client_pan(
     client_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientDetailResponse:
@@ -180,9 +207,11 @@ async def get_client_pan(
 
 
 @crm_router.patch("/clients/{client_id}/pan", response_model=ClientResponse)
+@limiter.limit("20/minute")
 async def update_client_pan(
     client_id: UUID,
     body: ClientPanUpdateRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
@@ -199,7 +228,9 @@ async def update_client_pan(
 
 
 @crm_router.post("/clients/export")
+@limiter.limit("10/minute")
 async def export_clients(
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> StreamingResponse:
@@ -215,7 +246,6 @@ async def export_clients(
 
 
 ALLOWED_PHOTO_MIMES = {"image/jpeg", "image/jpg", "image/png"}
-ALLOWED_FILE_MIMES: set[str] = set()  # empty set = all MIME types allowed
 MAX_ID_PHOTO_SIZE = 2 * 1024 * 1024  # 2MB for DB storage
 
 
@@ -228,14 +258,19 @@ async def get_document_service(
     try:
         async with db.session() as session:
             yield DocumentService(
-                session=session, auth=auth, envelope=auth._envelope, storage=storage,
+                session=session,
+                auth=auth,
+                envelope=auth.envelope,
+                storage=storage,
             )
     finally:
         await db.close()
 
 
 @crm_router.post("/documents", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")
 async def create_document(
+    request: Request,  # noqa: ARG001
     client_id: UUID = Form(...),  # noqa: B008
     document_type: str = Form(...),  # noqa: B008
     is_id: bool = Form(True),  # noqa: B008
@@ -258,7 +293,6 @@ async def create_document(
     """
     try:
         if is_id:
-            _validate_is_id = True  # handled inline below
             front_bytes, front_mime = None, None
             if front_photo:
                 if front_photo.content_type not in ALLOWED_PHOTO_MIMES:
@@ -317,7 +351,9 @@ async def create_document(
 
 
 @crm_router.get("/documents", response_model=PaginatedResponse[DocumentResponse])
+@limiter.limit("60/minute")
 async def list_documents(
+    request: Request,  # noqa: ARG001
     client_id: UUID | None = Query(None),  # noqa: B008
     document_type: str | None = Query(None, max_length=50),  # noqa: B008
     search: str | None = Query(None, max_length=200),  # noqa: B008
@@ -347,8 +383,10 @@ async def list_documents(
 
 
 @crm_router.post("/documents/photos/batch", response_model=DocumentBatchPhotosResponse)
+@limiter.limit("30/minute")
 async def batch_document_photos(
     body: DocumentBatchPhotosRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentBatchPhotosResponse:
@@ -359,8 +397,10 @@ async def batch_document_photos(
 
 
 @crm_router.get("/documents/{document_id}", response_model=DocumentResponse)
+@limiter.limit("60/minute")
 async def get_document(
     document_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
@@ -375,8 +415,10 @@ async def get_document(
 
 
 @crm_router.get("/documents/{document_id}/photo/front")
+@limiter.limit("60/minute")
 async def get_document_front_photo(
     document_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> StreamingResponse:
@@ -400,8 +442,10 @@ async def get_document_front_photo(
 
 
 @crm_router.get("/documents/{document_id}/photo/back")
+@limiter.limit("60/minute")
 async def get_document_back_photo(
     document_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> StreamingResponse:
@@ -425,9 +469,11 @@ async def get_document_back_photo(
 
 
 @crm_router.patch("/documents/{document_id}", response_model=DocumentResponse)
+@limiter.limit("30/minute")
 async def update_document(
     document_id: UUID,
     body: DocumentUpdateRequest,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
@@ -452,8 +498,10 @@ async def update_document(
 
 
 @crm_router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/minute")
 async def delete_document(
     document_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> None:
@@ -466,8 +514,10 @@ async def delete_document(
 
 
 @crm_router.post("/documents/{document_id}/restore", response_model=DocumentResponse)
+@limiter.limit("20/minute")
 async def restore_document(
     document_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
@@ -481,8 +531,10 @@ async def restore_document(
 
 
 @crm_router.delete("/documents/{document_id}/hard", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("10/minute")
 async def hard_delete_document(
     document_id: UUID,
+    request: Request,  # noqa: ARG001
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> None:

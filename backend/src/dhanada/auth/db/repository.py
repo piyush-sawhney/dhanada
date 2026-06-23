@@ -227,6 +227,26 @@ class RoleRepository(BaseRepository[Role]):
                     return True
         return False
 
+    async def add_permission(self, role_id: uuid.UUID, resource: str, action: str) -> bool:
+        """Add a permission to a role."""
+        existing = await self._session.execute(
+            select(RolePermission).where(
+                RolePermission.role_id == role_id,
+                RolePermission.resource == resource,
+                RolePermission.action == action,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            return True
+        permission = RolePermission(
+            role_id=role_id,
+            resource=resource,
+            action=action,
+        )
+        self._session.add(permission)
+        await self._session.flush()
+        return True
+
     async def remove_permission(self, role_id: uuid.UUID, resource: str, action: str) -> bool:
         result = await self._session.execute(
             delete(RolePermission).where(
@@ -380,9 +400,6 @@ class AppRepository(BaseRepository[App]):
         return cast(bool, result.rowcount > 0)  # type: ignore[attr-defined]
 
     async def get_user_apps(self, user_id: uuid.UUID) -> list[App]:
-        result = await self._session.execute(
-            select(UserApp).where(UserApp.user_id == user_id)
-        )
+        result = await self._session.execute(select(UserApp).where(UserApp.user_id == user_id))
         user_apps = result.scalars().all()
         return [ua.app for ua in user_apps]
-
