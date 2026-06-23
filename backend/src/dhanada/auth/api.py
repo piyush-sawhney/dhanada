@@ -494,6 +494,7 @@ class AuthManager:
             service = RoleService(role_repo, user_repo)
             role = await service.create_role(name, description)
             if role is not None:
+                await session.refresh(role, ["permissions"])
                 AuditService.role_created(
                     role_name=name,
                     actor_id=str(current_user_id) if current_user_id else None,
@@ -507,7 +508,10 @@ class AuthManager:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
             service = RoleService(role_repo, user_repo)
-            return await service.get_role_by_name(name)
+            role = await service.get_role_by_name(name)
+            if role is not None:
+                await session.refresh(role, ["permissions"])
+            return role
 
     async def list_roles(self) -> list[Role]:
         """List all roles."""
@@ -515,7 +519,10 @@ class AuthManager:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
             service = RoleService(role_repo, user_repo)
-            return await service.list_roles()
+            roles = await service.list_roles()
+            for role in roles:
+                await session.refresh(role, ["permissions"])
+            return roles
 
     async def delete_role(
         self,

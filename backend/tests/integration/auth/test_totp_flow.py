@@ -17,7 +17,10 @@ class TestTOTPFlow:
     async def setup_totp_user(
         self, superuser_token: str, client: AsyncClient
     ):
-        """Create an active user for TOTP testing."""
+        """Create an active user for TOTP testing (once per instance)."""
+        if hasattr(self, "_totp_data"):
+            return
+
         resp = await client.post(
             "/api/auth/register",
             headers={"Authorization": f"Bearer {superuser_token}"},

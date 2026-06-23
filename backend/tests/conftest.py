@@ -101,14 +101,13 @@ async def _ensure_tables(
     """
     engine = create_async_engine(_test_database_url)
     async with engine.begin() as conn:
-        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
-        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS crm"))
+        await conn.execute(text("DROP SCHEMA IF EXISTS auth CASCADE"))
+        await conn.execute(text("DROP SCHEMA IF EXISTS crm CASCADE"))
+        await conn.execute(text("CREATE SCHEMA auth"))
+        await conn.execute(text("CREATE SCHEMA crm"))
         await conn.run_sync(Base.metadata.create_all)
-        for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(table.delete())
     yield
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
         await conn.execute(text("DROP SCHEMA IF EXISTS auth CASCADE"))
         await conn.execute(text("DROP SCHEMA IF EXISTS crm CASCADE"))
     await engine.dispose()
@@ -211,13 +210,20 @@ async def auth_manager(auth_config: AuthConfig) -> AsyncGenerator[AuthManager, N
 
 @pytest_asyncio.fixture
 async def test_user(auth_manager: AuthManager) -> User:
-    """Create a test user with superuser rights for service tests."""
+    """Create a test superuser for service tests."""
     user = await auth_manager.register_user(
         email="services.test@example.com",
         username="servicestest",
-        password="ServiceTest123!",  # noqa: S106
+        password="ServiceTest123!",
         full_name="Service Test User",
     )
+    from dhanada.auth.db.repository import UserRepository
+    from dhanada.auth.db.session import DatabaseSession
+    db = DatabaseSession(str(auth_manager.config.database_url))
+    async with db.session() as session:
+        repo = UserRepository(session)
+        await repo.update(user.id, is_superuser=True)
+    await db.close()
     return user
 
 

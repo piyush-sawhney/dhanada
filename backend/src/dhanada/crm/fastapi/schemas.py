@@ -114,7 +114,7 @@ class DocumentResponse(BaseModel):
             has_front = doc.front_photo_data is not None
             has_back = doc.back_photo_data is not None
         else:
-            has_front = doc.front_photo_path is not None
+            has_front = False
             has_back = False
 
         return cls(

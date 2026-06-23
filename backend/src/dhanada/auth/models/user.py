@@ -72,6 +72,11 @@ class User(BaseModel):
         DateTime(timezone=True),
         nullable=True,
     )
+    password_reset_version: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
 
     # Expiry for inactive accounts (auto-cleanup after 24h)
     expires_at: Mapped[datetime | None] = mapped_column(

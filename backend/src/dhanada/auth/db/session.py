@@ -45,7 +45,6 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
         engine,
         class_=AsyncSession,
         expire_on_commit=False,
-        eager_defaults=True,
     )
 
 

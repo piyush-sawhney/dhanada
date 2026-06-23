@@ -32,6 +32,14 @@ class TokenPayload:
 
 
 @dataclass
+class ResetTokenPayload(TokenPayload):
+    """Reset token payload with single-use version tracking."""
+
+    ver: int = 0
+    """User's password_reset_version at time of issuance."""
+
+
+@dataclass
 class AccessTokenPayload(TokenPayload):
     """Access token payload with authorization claims."""
 
@@ -294,12 +302,13 @@ class JWTManager:
             type=payload["type"],
         )
 
-    def create_reset_token(self, user_id: uuid.UUID, ttl_minutes: int = 60) -> str:
+    def create_reset_token(self, user_id: uuid.UUID, ttl_minutes: int = 60, version: int = 0) -> str:
         """Create a password reset token (single-use).
 
         Args:
             user_id: User UUID.
             ttl_minutes: Token TTL in minutes (default 1h).
+            version: User's ``password_reset_version`` at time of issuance.
 
         Returns:
             Signed JWT reset token string.
@@ -311,6 +320,7 @@ class JWTManager:
             "iat": now,
             "jti": str(uuid.uuid4()),
             "type": "reset",
+            "ver": version,
         }
         headers = {"kid": self._current_key_id}
         return jwt.encode(
@@ -320,14 +330,14 @@ class JWTManager:
             headers=headers,
         )
 
-    def verify_reset_token(self, token: str) -> TokenPayload:
+    def verify_reset_token(self, token: str) -> ResetTokenPayload:
         """Verify and decode a password reset token.
 
         Args:
             token: JWT reset token string.
 
         Returns:
-            TokenPayload with decoded claims.
+            ResetTokenPayload with decoded claims.
 
         Raises:
             TokenExpiredError: Token has expired.
@@ -336,12 +346,13 @@ class JWTManager:
         payload = self._decode_token(token)
         if payload.get("type") != "reset":
             raise InvalidTokenError("Token is not a reset token")
-        return TokenPayload(
+        return ResetTokenPayload(
             sub=payload["sub"],
             exp=payload["exp"],
             iat=payload["iat"],
             jti=payload["jti"],
             type=payload["type"],
+            ver=payload.get("ver", 0),
         )
 
     def _decode_token(self, token: str) -> dict[str, Any]:

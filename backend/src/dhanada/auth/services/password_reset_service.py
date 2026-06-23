@@ -60,7 +60,9 @@ class PasswordResetService:
         if user is None or user.deleted_at is not None:
             return True
 
-        token = self._jwt.create_reset_token(user.id, self._token_ttl)
+        token = self._jwt.create_reset_token(
+            user.id, self._token_ttl, version=user.password_reset_version
+        )
         reset_url = f"{self._base_url}/reset-password?token={token}"
 
         if self._email_sender is not None:
@@ -109,8 +111,18 @@ class PasswordResetService:
         if user is None or user.deleted_at is not None:
             raise UserNotFoundError("User not found")
 
+        if payload.ver != user.password_reset_version:
+            raise InvalidTokenError(
+                "Password reset link has already been used",
+                hint="Request a new password reset email",
+            )
+
         new_hash = self._password_manager.hash_password(new_password)
-        await self._user_repo.update(user_id, password_hash=new_hash)
+        await self._user_repo.update(
+            user_id,
+            password_hash=new_hash,
+            password_reset_version=user.password_reset_version + 1,
+        )
 
         await self._token_repo.revoke_user_tokens(user_id)
 

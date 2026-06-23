@@ -63,7 +63,9 @@ class TestPasswordReset:
             user_repo = UserRepository(session)
             user = await user_repo.get_by_email("super@test.com")
 
-        token = auth_manager._jwt.create_reset_token(user.id, ttl_minutes=60)
+        token = auth_manager._jwt.create_reset_token(
+            user.id, ttl_minutes=60, version=user.password_reset_version
+        )
         resp = await client.post(
             "/api/auth/reset-password",
             json={"token": token, "new_password": "NewSecurePass123!"},
@@ -85,7 +87,9 @@ class TestPasswordReset:
             user_repo = UserRepository(session)
             user = await user_repo.get_by_email("super@test.com")
 
-        token = auth_manager._jwt.create_reset_token(user.id, ttl_minutes=60)
+        token = auth_manager._jwt.create_reset_token(
+            user.id, ttl_minutes=60, version=user.password_reset_version
+        )
 
         resp1 = await client.post(
             "/api/auth/reset-password",

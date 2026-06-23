@@ -90,7 +90,8 @@ class TestSessionListing:
             f"/api/auth/admin/users/{UUID(int=0)}/sessions",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 404
+        # Non-superuser → 403 Forbidden (require_superuser dependency)
+        assert resp.status_code == 403
 
 
 class TestLogoutAll:

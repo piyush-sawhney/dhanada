@@ -209,6 +209,9 @@ class TokenService:
         user_id: uuid.UUID,
     ) -> list[dict[str, Any]]:
         """Get list of active sessions for a user (metadata only, no token hashes)."""
+        user = await self._user_repo.get(user_id)
+        if user is None:
+            raise UserNotFoundError(f"User {user_id} not found")
         tokens = await self._token_repo.get_active_by_user(user_id)
         sessions = []
         for token in tokens:
