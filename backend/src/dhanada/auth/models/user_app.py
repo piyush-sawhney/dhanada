@@ -41,10 +41,12 @@ class UserApp(BaseModel):
         "User",
         foreign_keys=[user_id],
         back_populates="user_app_links",
+        lazy="selectin",
     )
     app: Mapped["App"] = relationship(
         "App",
         back_populates="user_app_links",
+        lazy="selectin",
     )
     assigned_by: Mapped["User | None"] = relationship(
         "User",

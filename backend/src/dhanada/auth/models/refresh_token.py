@@ -76,6 +76,7 @@ class RefreshToken(BaseModel):
         "User",
         foreign_keys=[user_id],
         back_populates="refresh_tokens",
+        lazy="selectin",
     )
 
     @property

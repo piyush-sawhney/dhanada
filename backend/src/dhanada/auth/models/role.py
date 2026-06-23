@@ -34,10 +34,12 @@ class UserRole(BaseModel):
         "User",
         foreign_keys=[user_id],
         back_populates="user_role_links",
+        lazy="selectin",
     )
     role: Mapped["Role"] = relationship(
         "Role",
         back_populates="user_role_links",
+        lazy="selectin",
     )
 
     def __repr__(self) -> str:
@@ -110,6 +112,7 @@ class RolePermission(BaseModel):
     role: Mapped["Role"] = relationship(
         "Role",
         back_populates="permissions",
+        lazy="selectin",
     )
 
     def __repr__(self) -> str:

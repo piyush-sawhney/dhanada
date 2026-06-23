@@ -12,7 +12,7 @@ class TestAdminUserCRUD:
     """Tests for admin user CRUD operations."""
 
     TEST_EMAIL = "admin-crud@test.com"
-    TEST_USERNAME = "admin-crud"
+    TEST_USERNAME = "admin_crud"
     TEST_FULL_NAME = "Admin CRUD User"
 
     async def test_register_user(

@@ -11,6 +11,7 @@ from dhanada.auth.exceptions import (
     AccountLockedError,
     AuthenticationError,
     CannotDeleteSystemRoleError,
+    InvalidCredentialsError,
     InvalidTokenError,
     SuperuserAlreadyExistsError,
     TokenExpiredError,
@@ -137,8 +138,11 @@ async def register(
             is_active=False,
         )
 
+        roles: list[str] = []
         if body.role_name:
-            await auth.assign_role(new_user.id, body.role_name, current_user_id=user.id)
+            ok = await auth.assign_role(new_user.id, body.role_name, current_user_id=user.id)
+            if ok:
+                roles.append(body.role_name)
 
         return UserCreatedResponse(
             id=new_user.id,
@@ -148,7 +152,7 @@ async def register(
             is_active=False,
             is_superuser=new_user.is_superuser,
             temporary_password=temp_password,
-            roles=[r.name for r in new_user.roles],
+            roles=roles,
             created_at=new_user.created_at,
             updated_at=new_user.updated_at,
         )
@@ -267,6 +271,8 @@ async def login(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)) from None
     except TOTPInvalidTokenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
+    except InvalidCredentialsError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
 
 
 @auth_router.post(

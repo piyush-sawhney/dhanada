@@ -104,6 +104,8 @@ async def _ensure_tables(
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS crm"))
         await conn.run_sync(Base.metadata.create_all)
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

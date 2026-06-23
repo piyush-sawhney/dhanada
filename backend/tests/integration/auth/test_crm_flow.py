@@ -13,29 +13,29 @@ pytestmark = pytest.mark.asyncio
 
 
 class TestClientCRUD:
-    """Tests for client CRUD operations."""
+    """Tests for client CRUD operations.
+
+    Each test creates its own unique PAN to remain independent —
+    there is no ``_clean_tables`` between functions in integration tests.
+    """
 
     _CLIENT_NAME = "Test Client"
-    _CLIENT_PAN = "ABCDE1234F"
     _UPDATED_NAME = "Updated Client"
 
     async def _create_client(
-        self, client: AsyncClient, token: str, name: str | None = None, pan: str | None = None
+        self, client: AsyncClient, token: str, name: str, pan: str
     ) -> dict:
         resp = await client.post(
             "/api/crm/clients",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "name": name or self._CLIENT_NAME,
-                "pan": pan or self._CLIENT_PAN,
-            },
+            json={"name": name, "pan": pan},
         )
         assert resp.status_code == 201, resp.text
         return resp.json()
 
     async def test_create_client(self, client: AsyncClient, superuser_token: str):
         """POST /api/crm/clients should create a new client."""
-        data = await self._create_client(client, superuser_token)
+        data = await self._create_client(client, superuser_token, self._CLIENT_NAME, "ABCDE1234F")
         assert data["name"] == self._CLIENT_NAME
         assert data["pan_number_hash"] is not None
         assert data["is_active"] is True
@@ -68,7 +68,7 @@ class TestClientCRUD:
 
     async def test_list_clients(self, client: AsyncClient, superuser_token: str):
         """GET /api/crm/clients should return paginated list."""
-        await self._create_client(client, superuser_token)
+        await self._create_client(client, superuser_token, "List Test", "LSTCL1234F")
         resp = await client.get(
             "/api/crm/clients",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -78,14 +78,14 @@ class TestClientCRUD:
         assert "items" in data
         assert "total" in data
         assert data["total"] >= 1
-        assert data["items"][0]["name"] == self._CLIENT_NAME
+        assert data["items"][0]["name"] == "List Test"
 
     async def test_list_clients_with_search(
         self, client: AsyncClient, superuser_token: str
     ):
         """GET /api/crm/clients?search= should filter by name."""
-        await self._create_client(client, superuser_token, name="Alice")
-        await self._create_client(client, superuser_token, name="Bob", pan="ZZZZZ9999Z")
+        await self._create_client(client, superuser_token, "Alice", "ALICL1234F")
+        await self._create_client(client, superuser_token, "Bob", "ZZZZZ9999Z")
         resp = await client.get(
             "/api/crm/clients?search=Alice",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -98,13 +98,13 @@ class TestClientCRUD:
 
     async def test_get_client(self, client: AsyncClient, superuser_token: str):
         """GET /api/crm/clients/{id} should return the client."""
-        created = await self._create_client(client, superuser_token)
+        created = await self._create_client(client, superuser_token, "Get Test", "GETCL1234F")
         resp = await client.get(
             f"/api/crm/clients/{created['id']}",
             headers={"Authorization": f"Bearer {superuser_token}"},
         )
         assert resp.status_code == 200
-        assert resp.json()["name"] == self._CLIENT_NAME
+        assert resp.json()["name"] == "Get Test"
 
     async def test_get_client_not_found(
         self, client: AsyncClient, superuser_token: str
@@ -118,7 +118,7 @@ class TestClientCRUD:
 
     async def test_update_client(self, client: AsyncClient, superuser_token: str):
         """PATCH /api/crm/clients/{id} should update the client name."""
-        created = await self._create_client(client, superuser_token)
+        created = await self._create_client(client, superuser_token, "Update Test", "UPCLT1234F")
         resp = await client.patch(
             f"/api/crm/clients/{created['id']}",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -131,7 +131,7 @@ class TestClientCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """DELETE /api/crm/clients/{id} should soft-delete the client."""
-        created = await self._create_client(client, superuser_token)
+        created = await self._create_client(client, superuser_token, "Soft Del", "SDCLT1234F")
         resp = await client.delete(
             f"/api/crm/clients/{created['id']}",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -146,7 +146,7 @@ class TestClientCRUD:
 
     async def test_restore_client(self, client: AsyncClient, superuser_token: str):
         """POST /api/crm/clients/{id}/restore should restore soft-deleted client."""
-        created = await self._create_client(client, superuser_token)
+        created = await self._create_client(client, superuser_token, "Restore", "RSVCL1234F")
         await client.delete(
             f"/api/crm/clients/{created['id']}",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -163,7 +163,7 @@ class TestClientCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """DELETE /api/crm/clients/{id}/hard should permanently delete."""
-        created = await self._create_client(client, superuser_token)
+        created = await self._create_client(client, superuser_token, "Hard Del", "HDCLT1234F")
         await client.delete(
             f"/api/crm/clients/{created['id']}",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -179,22 +179,22 @@ class TestClientCRUD:
     ):
         """GET /api/crm/clients/{id}/pan should return decrypted PAN."""
         await _ensure_permission(auth_manager, superuser_token, "clients:manage-pan")
-        created = await self._create_client(client, superuser_token)
+        created = await self._create_client(client, superuser_token, "Get PAN", "GPANC1234L")
         resp = await client.get(
             f"/api/crm/clients/{created['id']}/pan",
             headers={"Authorization": f"Bearer {superuser_token}"},
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["pan"] == self._CLIENT_PAN
+        assert data["pan"] == "GPANC1234L"
 
     async def test_update_client_pan(
         self, client: AsyncClient, superuser_token: str, auth_manager: AuthManager
     ):
         """PATCH /api/crm/clients/{id}/pan should update the PAN."""
         await _ensure_permission(auth_manager, superuser_token, "clients:manage-pan")
-        created = await self._create_client(client, superuser_token)
-        new_pan = "ZZZZZ9999Z"
+        created = await self._create_client(client, superuser_token, "Upd PAN", "UPNCL1234X")
+        new_pan = "UPNCL5678Y"
         resp = await client.patch(
             f"/api/crm/clients/{created['id']}/pan",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -247,16 +247,16 @@ class TestClientCRUD:
 
 
 class TestDocumentCRUD:
-    """Tests for document CRUD operations."""
+    """Tests for document CRUD operations.
 
-    _CLIENT_NAME = "Doc Test Client"
-    _CLIENT_PAN = "STUVW1234X"
+    Each test creates its own client with a unique PAN to remain independent.
+    """
 
-    async def _create_client(self, client: AsyncClient, token: str) -> dict:
+    async def _create_client(self, client: AsyncClient, token: str, pan: str) -> dict:
         resp = await client.post(
             "/api/crm/clients",
             headers={"Authorization": f"Bearer {token}"},
-            json={"name": self._CLIENT_NAME, "pan": self._CLIENT_PAN},
+            json={"name": "Doc Test Client", "pan": pan},
         )
         assert resp.status_code == 201
         return resp.json()
@@ -265,7 +265,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """POST /api/crm/documents should create an ID document with photo."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCID1234A")
         photo_bytes = b"fake-jpeg-data"
         resp = await client.post(
             "/api/crm/documents",
@@ -290,7 +290,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """POST /api/crm/documents should create a non-ID document with file."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCNI1234B")
         file_bytes = b"fake-file-content"
         resp = await client.post(
             "/api/crm/documents",
@@ -312,7 +312,7 @@ class TestDocumentCRUD:
 
     async def test_list_documents(self, client: AsyncClient, superuser_token: str):
         """GET /api/crm/documents should return paginated list."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCLS1234C")
         resp = await client.post(
             "/api/crm/documents",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -339,7 +339,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """GET /api/crm/documents/{id}/photo/front should stream photo."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCPH1234D")
         photo_bytes = b"fake-jpeg-data-123"
         doc_resp = await client.post(
             "/api/crm/documents",
@@ -367,7 +367,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """PATCH /api/crm/documents/{id} should update metadata."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCUP1234E")
         doc_resp = await client.post(
             "/api/crm/documents",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -393,7 +393,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """DELETE /api/crm/documents/{id} should soft-delete."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCSD1234F")
         doc_resp = await client.post(
             "/api/crm/documents",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -423,7 +423,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """POST /api/crm/documents/{id}/restore should restore."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCRS1234G")
         doc_resp = await client.post(
             "/api/crm/documents",
             headers={"Authorization": f"Bearer {superuser_token}"},
@@ -452,7 +452,7 @@ class TestDocumentCRUD:
         self, client: AsyncClient, superuser_token: str
     ):
         """Creating a document with >2MB photo should return 400."""
-        cl = await self._create_client(client, superuser_token)
+        cl = await self._create_client(client, superuser_token, "DOCPL1234H")
         large_photo = b"x" * (2 * 1024 * 1024 + 1)
         resp = await client.post(
             "/api/crm/documents",
@@ -517,8 +517,7 @@ async def _make_user_token(
             await role_repo.add_permission(role.id, resource, action)
         await session.flush()
 
-        await auth_manager.assign_role(user.id, role.name, current_user_id=user.id)
-        await session.commit()
-
+        await role_repo.assign_role_to_user(user.id, role.id, created_by_id=user.id)
         result = await token_service.create_tokens(user_id=user.id)
+        await session.commit()
         return result.access_token

@@ -45,6 +45,13 @@ class ClientService:
             raise ValueError("Invalid PAN format (expected: AAAAA1234A)")
 
         pan_hash = hmac.new(self._pan_hmac_key, pan_normalized.encode(), "sha256").hexdigest()
+
+        existing = await self._session.execute(
+            select(Client).where(Client.pan_number_hash == pan_hash)
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ValueError("A client with this PAN already exists")
+
         encrypted = self._envelope.encrypt(pan_normalized.encode())
 
         client = await self._repo.create(

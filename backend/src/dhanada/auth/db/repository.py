@@ -372,14 +372,15 @@ class AppRepository(BaseRepository[App]):
         *,
         assigned_by_id: uuid.UUID | None = None,
     ) -> UserApp:
-        existing = await self._session.execute(
+        result = await self._session.execute(
             select(UserApp).where(
                 UserApp.user_id == user_id,
                 UserApp.app_id == app_id,
             )
         )
-        if existing.scalar_one_or_none() is not None:
-            raise ValueError(f"User {user_id} is already assigned to app {app_id}")
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            return existing
         user_app = UserApp(
             user_id=user_id,
             app_id=app_id,

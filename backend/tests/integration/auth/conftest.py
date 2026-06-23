@@ -21,12 +21,12 @@ SUPERUSER_PASSWORD = "SuperSecret123!"  # noqa: S105
 @pytest_asyncio.fixture(autouse=True)
 async def _integration_db(
     _ensure_tables: None,
-    _clean_tables: None,
 ) -> None:
-    """Ensure database tables exist and are clean for each integration test.
+    """Ensure database tables exist for integration tests (session-scoped).
 
-    ``_ensure_tables`` (session-scoped) creates schemas and tables once.
-    ``_clean_tables`` (function-scoped) truncates all data before each test.
+    Note: ``_clean_tables`` is intentionally NOT included here because
+    integration test classes like ``TestAdminUserCRUD`` use sequential
+    shared-state patterns. Truncating between each function would break them.
     """
 
 

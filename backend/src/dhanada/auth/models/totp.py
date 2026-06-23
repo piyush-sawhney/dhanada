@@ -99,6 +99,7 @@ class TOTPSecret(BaseModel):
         "User",
         foreign_keys=[user_id],
         back_populates="totp_secret",
+        lazy="selectin",
     )
 
     def __repr__(self) -> str:
