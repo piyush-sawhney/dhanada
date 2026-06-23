@@ -12,9 +12,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from dhanada.auth.models.base import BaseModel
 
 if TYPE_CHECKING:
+    from dhanada.auth.models.app import App
     from dhanada.auth.models.refresh_token import RefreshToken
     from dhanada.auth.models.role import Role, UserRole
     from dhanada.auth.models.totp import TOTPSecret
+    from dhanada.auth.models.user_app import UserApp
 
 
 class User(BaseModel):
@@ -90,6 +92,13 @@ class User(BaseModel):
     )
 
     # Relationships
+    user_app_links: Mapped[list["UserApp"]] = relationship(
+        "UserApp",
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
+    apps: AssociationProxy[list["App"]] = association_proxy("user_app_links", "app")
     user_role_links: Mapped[list["UserRole"]] = relationship(
         "UserRole",
         back_populates="user",

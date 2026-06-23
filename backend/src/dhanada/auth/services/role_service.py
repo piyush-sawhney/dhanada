@@ -3,7 +3,8 @@
 import uuid
 from dataclasses import dataclass
 
-from dhanada.auth.db.repository import RoleRepository, UserRepository
+from dhanada.auth.constants import RESOURCE_APP_MAP
+from dhanada.auth.db.repository import AppRepository, RoleRepository, UserRepository
 from dhanada.auth.exceptions import (
     CannotDeleteSystemRoleError,
     PermissionDeniedError,
@@ -28,9 +29,11 @@ class RoleService:
         self,
         role_repo: RoleRepository,
         user_repo: UserRepository,
+        app_repo: AppRepository | None = None,
     ) -> None:
         self._role_repo = role_repo
         self._user_repo = user_repo
+        self._app_repo = app_repo
 
     async def assign_role(
         self,
@@ -92,6 +95,15 @@ class RoleService:
 
         if user.is_superuser:
             return PermissionCheck(allowed=True, resource=resource, action=action)
+
+        if self._app_repo is not None:
+            app_slug = RESOURCE_APP_MAP.get(resource)
+            if app_slug is not None:
+                app = await self._app_repo.get_by_slug(app_slug)
+                if app is None:
+                    return PermissionCheck(allowed=False, resource=resource, action=action)
+                if not await self._app_repo.user_has_app(user_id, app.id):
+                    return PermissionCheck(allowed=False, resource=resource, action=action)
 
         allowed = await self._role_repo.check_permission(user_id, resource, action)
         return PermissionCheck(allowed=allowed, resource=resource, action=action)

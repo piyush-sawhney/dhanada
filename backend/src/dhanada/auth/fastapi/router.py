@@ -46,6 +46,7 @@ from dhanada.auth.fastapi.schemas import (
     PermissionCheckResponse,
     ProfileUpdateRequest,
     RefreshRequest,
+    RegisterUserAppRequest,
     ResetPasswordRequest,
     ResetPasswordResponse,
     RevokeRoleRequest,
@@ -61,6 +62,8 @@ from dhanada.auth.fastapi.schemas import (
     TOTPDisableRequest,
     TOTPEnableResponse,
     TOTPVerifyRequest,
+    UnregisterUserAppRequest,
+    UserAppListResponse,
     UserCreatedResponse,
     UserDeleteResponse,
     UserListResponse,
@@ -1052,3 +1055,64 @@ async def remove_permission_from_role(
             detail=f"Role '{role_name}' or permission not found",
         )
     return {"removed": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin: App Membership
+# ---------------------------------------------------------------------------
+
+
+@auth_router.post(
+    "/admin/apps/register",
+    status_code=status.HTTP_200_OK,
+)
+async def register_user_to_app(
+    body: RegisterUserAppRequest,
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> dict[str, Any]:
+    """Register a user to an app. Requires superuser."""
+    registered = await auth.register_user_to_app(
+        body.user_id,
+        body.app_slug,
+        assigned_by_id=_user.id,
+    )
+    if not registered:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"App '{body.app_slug}' not found",
+        )
+    return {"registered": True}
+
+
+@auth_router.post(
+    "/admin/apps/unregister",
+    status_code=status.HTTP_200_OK,
+)
+async def unregister_user_from_app(
+    body: UnregisterUserAppRequest,
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> dict[str, Any]:
+    """Unregister a user from an app. Requires superuser."""
+    unregistered = await auth.unregister_user_from_app(body.user_id, body.app_slug)
+    if not unregistered:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="App or user-app association not found",
+        )
+    return {"unregistered": True}
+
+
+@auth_router.get(
+    "/admin/apps/users/{user_id}",
+    response_model=UserAppListResponse,
+)
+async def get_user_apps(
+    user_id: UUID,
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> UserAppListResponse:
+    """Get all registered apps for a user. Requires superuser."""
+    app_slugs = await auth.get_user_apps(user_id)
+    return UserAppListResponse(app_slugs=app_slugs)

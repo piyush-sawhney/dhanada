@@ -40,3 +40,9 @@ IP_ADDRESS_MAX_LENGTH = 45
 # Rate limiting (for future use)
 DEFAULT_RATE_LIMIT_REQUESTS = 100
 DEFAULT_RATE_LIMIT_WINDOW = 60
+
+# App membership — maps resources to app slugs
+RESOURCE_APP_MAP: dict[str, str] = {
+    "clients": "crm",
+    "documents": "crm",
+}

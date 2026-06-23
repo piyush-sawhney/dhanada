@@ -1,13 +1,18 @@
 """Pydantic schemas for CRM API."""
 
+from __future__ import annotations
+
 import re
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from dhanada.crm.models import DocumentType
+
+if TYPE_CHECKING:
+    from dhanada.crm.models import Document
 
 PAN_PATTERN = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
 
@@ -58,11 +63,18 @@ class ClientDetailResponse(ClientResponse):
     pan: str | None = None
 
 
+class PaginatedResponse[DataT](BaseModel):
+    items: list[DataT]
+    total: int
+    offset: int
+    limit: int
+
+
 class ClientListParams(BaseModel):
     search: str | None = Field(None, max_length=255)
-    include_inactive: bool = False
-    page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=50, ge=1, le=200)
+    status: Literal["active", "inactive", "all"] = "active"
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=500)
 
 
 class DocumentCreateRequest(BaseModel):
@@ -105,7 +117,7 @@ class DocumentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_document(cls, doc: Any) -> "DocumentResponse":
+    def from_document(cls, doc: Document) -> DocumentResponse:
         return cls(
             id=doc.id,
             client_id=doc.client_id,

@@ -41,6 +41,12 @@ class AuthConfig(BaseSettings):
     # Envelope Encryption - Key Encryption Key (KEK)
     kek_base64: str = Field(description="Base64-encoded 32-byte KEK for envelope encryption")
 
+    # PAN HMAC Key
+    pan_hmac_key: str = Field(
+        description="Secret key for HMAC-SHA256 hashing of PAN numbers (min 16 chars)",
+        min_length=16,
+    )
+
     # TOTP Configuration
     totp_issuer: str = Field(default="Dhanada", description="TOTP issuer name")
     totp_window: int = Field(default=1, description="TOTP verification window")

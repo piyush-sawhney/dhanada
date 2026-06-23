@@ -58,6 +58,9 @@ dev = [
 where = ["src"]
 include = ["dhanada*"]
 
+[tool.setuptools.package-data]
+dhanada = ["py.typed"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

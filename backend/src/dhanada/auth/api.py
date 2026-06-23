@@ -12,6 +12,7 @@ from dhanada.auth.config import AuthConfig
 from dhanada.auth.crypto.envelope import EnvelopeEncryption
 from dhanada.auth.crypto.keys import KEKManager
 from dhanada.auth.db.repository import (
+    AppRepository,
     RefreshTokenRepository,
     RoleRepository,
     TOTPRepository,
@@ -374,7 +375,8 @@ class AuthManager:
         async with self._db.session() as session:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
-            service = RoleService(role_repo, user_repo)
+            app_repo = AppRepository(session)
+            service = RoleService(role_repo, user_repo, app_repo=app_repo)
             return await service.check_permission(user_id, resource, action)
 
     async def assert_permission(self, user_id: uuid.UUID, resource: str, action: str) -> None:
@@ -382,7 +384,8 @@ class AuthManager:
         async with self._db.session() as session:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
-            service = RoleService(role_repo, user_repo)
+            app_repo = AppRepository(session)
+            service = RoleService(role_repo, user_repo, app_repo=app_repo)
             await service.assert_permission(user_id, resource, action)
 
     async def update_profile(
@@ -801,6 +804,38 @@ class AuthManager:
                 base_url=self._config.base_url,
             )
             return await service.send_verification(user_id)
+
+    async def register_user_to_app(
+        self,
+        user_id: uuid.UUID,
+        app_slug: str,
+        *,
+        assigned_by_id: uuid.UUID | None = None,
+    ) -> bool:
+        """Register a user to an app. Raises if app slug not found."""
+        async with self._db.session() as session:
+            app_repo = AppRepository(session)
+            app = await app_repo.get_by_slug(app_slug)
+            if app is None:
+                return False
+            await app_repo.assign_user(user_id, app.id, assigned_by_id=assigned_by_id)
+            return True
+
+    async def unregister_user_from_app(self, user_id: uuid.UUID, app_slug: str) -> bool:
+        """Unregister a user from an app."""
+        async with self._db.session() as session:
+            app_repo = AppRepository(session)
+            app = await app_repo.get_by_slug(app_slug)
+            if app is None:
+                return False
+            return await app_repo.remove_user(user_id, app.id)
+
+    async def get_user_apps(self, user_id: uuid.UUID) -> list[str]:
+        """Get all app slugs a user is registered to."""
+        async with self._db.session() as session:
+            app_repo = AppRepository(session)
+            apps = await app_repo.get_user_apps(user_id)
+            return [app.slug for app in apps]
 
     async def close(self) -> None:
         """Close database connections."""

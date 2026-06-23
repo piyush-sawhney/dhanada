@@ -242,3 +242,17 @@ class SessionResponse(BaseModel):
 
 class SessionListResponse(BaseModel):
     sessions: list[SessionResponse]
+
+
+class RegisterUserAppRequest(BaseModel):
+    user_id: UUID
+    app_slug: str = Field(..., min_length=1, max_length=50)
+
+
+class UnregisterUserAppRequest(BaseModel):
+    user_id: UUID
+    app_slug: str = Field(..., min_length=1, max_length=50)
+
+
+class UserAppListResponse(BaseModel):
+    app_slugs: list[str]

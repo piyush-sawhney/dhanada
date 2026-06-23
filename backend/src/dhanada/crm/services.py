@@ -2,13 +2,13 @@
 
 import base64
 import csv
-import hashlib
+import hmac
 import io
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dhanada.auth.api import AuthManager
@@ -30,6 +30,7 @@ class ClientService:
         self._auth = auth
         self._envelope = envelope
         self._repo = _ClientRepository(session)
+        self._pan_hmac_key = auth.config.pan_hmac_key.encode()
 
     async def create(self, user_id: UUID, name: str, pan: str) -> Client:
         await self._auth.assert_permission(user_id, "clients", "create")
@@ -38,7 +39,7 @@ class ClientService:
         if not validate_pan(pan_normalized):
             raise ValueError("Invalid PAN format (expected: AAAAA1234A)")
 
-        pan_hash = hashlib.sha256(pan_normalized.encode()).hexdigest()
+        pan_hash = hmac.new(self._pan_hmac_key, pan_normalized.encode(), "sha256").hexdigest()
         encrypted = self._envelope.encrypt(pan_normalized.encode())
 
         client = await self._repo.create(
@@ -59,10 +60,13 @@ class ClientService:
         return client
 
     async def list_all(
-        self, user_id: UUID, search: str | None = None, include_inactive: bool = False
-    ) -> list[Client]:
+        self, user_id: UUID, search: str | None = None, include_inactive: bool = False,
+        offset: int = 0, limit: int = 100,
+    ) -> tuple[list[Client], int]:
         await self._auth.assert_permission(user_id, "clients", "read")
-        return await self._repo.list_all(search=search, include_inactive=include_inactive)
+        return await self._repo.list_all(
+            search=search, include_inactive=include_inactive, offset=offset, limit=limit,
+        )
 
     async def update(self, user_id: UUID, client_id: UUID, name: str | None = None) -> Client:
         await self._auth.assert_permission(user_id, "clients", "edit")
@@ -92,6 +96,25 @@ class ClientService:
         )
         return True
 
+    async def restore(self, user_id: UUID, client_id: UUID) -> Client:
+        await self._auth.assert_permission(user_id, "clients", "delete")
+        client = await self._repo.get(client_id)
+        if client is None or client.is_active:
+            return client
+        return await self._repo.update(
+            client_id,
+            is_active=True,
+            deleted_at=None,
+            deleted_by_id=None,
+        )
+
+    async def hard_delete(self, user_id: UUID, client_id: UUID) -> bool:
+        await self._auth.assert_permission(user_id, "clients", "delete")
+        client = await self._repo.get(client_id)
+        if client is None or client.is_active:
+            return False
+        return await self._repo.hard_delete(client_id)
+
     async def get_pan(self, user_id: UUID, client_id: UUID) -> str:
         await self._auth.assert_permission(user_id, "clients", "manage-pan")
         client = await self._repo.get(client_id)
@@ -115,7 +138,7 @@ class ClientService:
         if not validate_pan(pan_normalized):
             raise ValueError("Invalid PAN format (expected: AAAAA1234A)")
 
-        pan_hash = hashlib.sha256(pan_normalized.encode()).hexdigest()
+        pan_hash = hmac.new(self._pan_hmac_key, pan_normalized.encode(), "sha256").hexdigest()
         encrypted = self._envelope.encrypt(pan_normalized.encode())
 
         return await self._repo.update(
@@ -126,14 +149,28 @@ class ClientService:
             encrypted_dek=encrypted.encrypted_dek,
         )
 
-    async def export_csv(self, user_id: UUID, include_pan: bool = False) -> str:
+    async def get_with_pan(self, user_id: UUID, client_id: UUID) -> tuple[Client, str]:
+        await self._auth.assert_permission(user_id, "clients", "read")
+        await self._auth.assert_permission(user_id, "clients", "manage-pan")
+        client = await self._repo.get(client_id)
+        if client is None or not client.is_active:
+            raise UserNotFoundError(f"Client {client_id} not found")
+
+        payload = EncryptedPayload.from_components(
+            ciphertext=client.encrypted_pan,
+            nonce=client.encrypted_nonce,
+            encrypted_dek=client.encrypted_dek,
+        )
+        pan = self._envelope.decrypt(payload).decode()
+        return client, pan
+
+    async def export_csv(self, user_id: UUID) -> str:
         await self._auth.assert_permission(user_id, "clients", "export")
 
-        can_manage_pan = include_pan
-        if include_pan:
-            await self._auth.assert_permission(user_id, "clients", "manage-pan")
+        perm = await self._auth.check_permission(user_id, "clients", "manage-pan")
+        can_manage_pan = perm.allowed
 
-        clients = await self._repo.list_all(include_inactive=False)
+        clients, _ = await self._repo.list_all(include_inactive=False)
         output = io.StringIO()
         writer = csv.writer(output)
         header = ["id", "name", "is_active", "created_at", "updated_at"]
@@ -177,16 +214,26 @@ class _ClientRepository:
         return result.scalar_one_or_none()
 
     async def list_all(
-        self, search: str | None = None, include_inactive: bool = False
-    ) -> list[Client]:
-        query = select(Client)
+        self, search: str | None = None, include_inactive: bool = False,
+        offset: int = 0, limit: int = 100,
+    ) -> tuple[list[Client], int]:
+        conditions = []
         if not include_inactive:
-            query = query.where(Client.is_active.is_(True))
+            conditions.append(Client.is_active.is_(True))
         if search:
-            query = query.where(Client.name.ilike(f"%{search}%"))
-        query = query.order_by(Client.created_at.desc())
+            conditions.append(Client.name.ilike(f"%{search}%"))
+
+        count_query = select(func.count()).select_from(Client)
+        if conditions:
+            count_query = count_query.where(*conditions)
+        total = (await self._session.execute(count_query)).scalar_one()
+
+        query = select(Client)
+        if conditions:
+            query = query.where(*conditions)
+        query = query.order_by(Client.created_at.desc()).offset(offset).limit(limit)
         result = await self._session.execute(query)
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total
 
     async def update(self, client_id: UUID, **kwargs: Any) -> Client:
         result = await self._session.execute(
@@ -194,6 +241,13 @@ class _ClientRepository:
         )
         await self._session.flush()
         return result.scalar_one()
+
+    async def hard_delete(self, client_id: UUID) -> bool:
+        result = await self._session.execute(
+            delete(Client).where(Client.id == client_id)
+        )
+        await self._session.flush()
+        return cast(bool, result.rowcount > 0)
 
 
 class DocumentService:
@@ -232,6 +286,9 @@ class DocumentService:
 
         if document_type == DocumentType.OTHER.value and not document_type_other:
             raise ValueError("document_type_other is required when document_type is 'other'")
+
+        if expiry_date and expiry_date <= issue_date:
+            raise ValueError("expiry_date must be after issue_date")
 
         front_data, front_nonce, front_dek = None, None, None
         if front_photo is not None:
@@ -283,19 +340,36 @@ class DocumentService:
         user_id: UUID,
         client_id: UUID | None = None,
         document_type: str | None = None,
+        search: str | None = None,
         include_inactive: bool = False,
-    ) -> list[Document]:
+        offset: int = 0, limit: int = 100,
+    ) -> tuple[list[Document], int]:
         await self._auth.assert_permission(user_id, "documents", "read")
-        query = select(Document)
+        conditions = []
         if not include_inactive:
-            query = query.where(Document.is_active.is_(True))
+            conditions.append(Document.is_active.is_(True))
         if client_id:
-            query = query.where(Document.client_id == client_id)
+            conditions.append(Document.client_id == client_id)
         if document_type:
-            query = query.where(Document.document_type == document_type)
-        query = query.order_by(Document.created_at.desc())
+            conditions.append(Document.document_type == document_type)
+        if search:
+            pattern = f"%{search}%"
+            conditions.append(
+                Document.document_number.ilike(pattern)
+                | Document.document_type.ilike(pattern)
+            )
+
+        count_query = select(func.count()).select_from(Document)
+        if conditions:
+            count_query = count_query.where(*conditions)
+        total = (await self._session.execute(count_query)).scalar_one()
+
+        query = select(Document)
+        if conditions:
+            query = query.where(*conditions)
+        query = query.order_by(Document.created_at.desc()).offset(offset).limit(limit)
         result = await self._session.execute(query)
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total
 
     async def update(
         self,
@@ -328,6 +402,9 @@ class DocumentService:
         if issue_date is not None:
             updates["issue_date"] = issue_date
         if expiry_date is not None:
+            effective_issue = issue_date if issue_date is not None else doc.issue_date
+            if expiry_date <= effective_issue:
+                raise ValueError("expiry_date must be after issue_date")
             updates["expiry_date"] = expiry_date
 
         if updates:
@@ -359,6 +436,31 @@ class DocumentService:
         await self._session.flush()
         return True
 
+    async def restore(self, user_id: UUID, document_id: UUID) -> Document:
+        await self._auth.assert_permission(user_id, "documents", "delete")
+        result = await self._session.execute(select(Document).where(Document.id == document_id))
+        doc = result.scalar_one_or_none()
+        if doc is None or doc.is_active:
+            return doc
+        result = await self._session.execute(
+            update(Document)
+            .where(Document.id == document_id)
+            .values(is_active=True, deleted_at=None, deleted_by_id=None)
+            .returning(Document)
+        )
+        await self._session.flush()
+        return result.scalar_one()
+
+    async def hard_delete(self, user_id: UUID, document_id: UUID) -> bool:
+        await self._auth.assert_permission(user_id, "documents", "delete")
+        result = await self._session.execute(select(Document).where(Document.id == document_id))
+        doc = result.scalar_one_or_none()
+        if doc is None or doc.is_active:
+            return False
+        await self._session.execute(delete(Document).where(Document.id == document_id))
+        await self._session.flush()
+        return True
+
     async def get_front_photo(self, user_id: UUID, document_id: UUID) -> tuple[bytes, str] | None:
         await self._auth.assert_permission(user_id, "documents", "read")
         result = await self._session.execute(
@@ -369,9 +471,10 @@ class DocumentService:
             raise UserNotFoundError(f"Document {document_id} not found")
         if doc.front_photo_data is None:
             return None
-        assert doc.front_photo_nonce is not None
-        assert doc.front_photo_dek is not None
-        assert doc.front_photo_mime is not None
+        if not all([doc.front_photo_nonce, doc.front_photo_dek, doc.front_photo_mime]):
+            raise ValueError(
+                "Inconsistent encryption state: front_photo_data present but missing nonce/DEK/MIME"
+            )
         payload = EncryptedPayload.from_components(
             ciphertext=doc.front_photo_data,
             nonce=doc.front_photo_nonce,
@@ -389,9 +492,10 @@ class DocumentService:
             raise UserNotFoundError(f"Document {document_id} not found")
         if doc.back_photo_data is None:
             return None
-        assert doc.back_photo_nonce is not None
-        assert doc.back_photo_dek is not None
-        assert doc.back_photo_mime is not None
+        if not all([doc.back_photo_nonce, doc.back_photo_dek, doc.back_photo_mime]):
+            raise ValueError(
+                "Inconsistent encryption state: back_photo_data present but missing nonce/DEK/MIME"
+            )
         payload = EncryptedPayload.from_components(
             ciphertext=doc.back_photo_data,
             nonce=doc.back_photo_nonce,
@@ -415,8 +519,10 @@ class DocumentService:
         for doc in docs:
             front_base64, front_mime = None, None
             if doc.front_photo_data is not None:
-                assert doc.front_photo_nonce is not None
-                assert doc.front_photo_dek is not None
+                if doc.front_photo_nonce is None or doc.front_photo_dek is None:
+                    raise ValueError(
+                        "Inconsistent state: front_photo_data present but missing nonce/DEK"
+                    )
                 payload = EncryptedPayload.from_components(
                     ciphertext=doc.front_photo_data,
                     nonce=doc.front_photo_nonce,
@@ -427,8 +533,10 @@ class DocumentService:
 
             back_base64, back_mime = None, None
             if doc.back_photo_data is not None:
-                assert doc.back_photo_nonce is not None
-                assert doc.back_photo_dek is not None
+                if doc.back_photo_nonce is None or doc.back_photo_dek is None:
+                    raise ValueError(
+                        "Inconsistent state: back_photo_data present but missing nonce/DEK"
+                    )
                 payload = EncryptedPayload.from_components(
                     ciphertext=doc.back_photo_data,
                     nonce=doc.back_photo_nonce,

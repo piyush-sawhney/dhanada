@@ -163,7 +163,8 @@ class TestDocumentService:
             document_type="aadhaar",
             issue_date=date(2024, 2, 1),
         )
-        docs = await svc_doc.list_all(test_user.id)
+        docs, total = await svc_doc.list_all(test_user.id)
+        assert total >= 2
         assert len(docs) >= 2
 
     async def test_list_filter_by_client(self, svc_doc, svc_client, test_user):
@@ -182,7 +183,8 @@ class TestDocumentService:
             document_type="aadhaar",
             issue_date=date(2024, 2, 1),
         )
-        docs = await svc_doc.list_all(test_user.id, client_id=client1.id)
+        docs, total = await svc_doc.list_all(test_user.id, client_id=client1.id)
+        assert total == 1
         assert len(docs) == 1
         assert docs[0].client_id == client1.id
 
@@ -201,7 +203,8 @@ class TestDocumentService:
             document_type="passport",
             issue_date=date(2024, 2, 1),
         )
-        docs = await svc_doc.list_all(test_user.id, document_type="passport")
+        docs, total = await svc_doc.list_all(test_user.id, document_type="passport")
+        assert total == 1
         assert len(docs) == 1
         assert docs[0].document_type == "passport"
 
@@ -335,7 +338,7 @@ class TestDocumentService:
             issue_date=date(2024, 1, 1),
         )
         await svc_doc.soft_delete(test_user.id, doc.id)
-        docs = await svc_doc.list_all(test_user.id)
+        docs, total = await svc_doc.list_all(test_user.id)
         assert doc.id not in [d.id for d in docs]
 
     async def test_has_front_photo_flag(self, svc_doc, svc_client, test_user):
@@ -413,3 +416,61 @@ class TestDocumentService:
         """Non-existent document IDs are silently omitted."""
         entries = await svc_doc.get_photos_batch(test_user.id, [uuid.uuid4()])
         assert len(entries) == 0
+
+    async def test_expiry_before_issue_raises_on_create(self, svc_doc, svc_client, test_user):
+        """expiry_date before issue_date should raise ValueError on create."""
+        client = await self._create_client(svc_client, test_user)
+        with pytest.raises(ValueError, match="expiry_date must be after issue_date"):
+            await svc_doc.create(
+                user_id=test_user.id,
+                client_id=client.id,
+                document_type="pan_card",
+                issue_date=date(2024, 6, 1),
+                expiry_date=date(2024, 1, 1),
+            )
+
+    async def test_expiry_equal_to_issue_raises(self, svc_doc, svc_client, test_user):
+        """expiry_date equal to issue_date should raise ValueError."""
+        client = await self._create_client(svc_client, test_user)
+        with pytest.raises(ValueError, match="expiry_date must be after issue_date"):
+            await svc_doc.create(
+                user_id=test_user.id,
+                client_id=client.id,
+                document_type="pan_card",
+                issue_date=date(2024, 1, 1),
+                expiry_date=date(2024, 1, 1),
+            )
+
+    async def test_expiry_before_issue_raises_on_update(self, svc_doc, svc_client, test_user):
+        """Updating expiry before issue should raise ValueError."""
+        client = await self._create_client(svc_client, test_user)
+        doc = await svc_doc.create(
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="pan_card",
+            issue_date=date(2024, 1, 1),
+            expiry_date=date(2025, 1, 1),
+        )
+        with pytest.raises(ValueError, match="expiry_date must be after issue_date"):
+            await svc_doc.update(
+                test_user.id,
+                doc.id,
+                expiry_date=date(2023, 1, 1),
+            )
+
+    async def test_list_documents_pagination(self, svc_doc, svc_client, test_user):
+        """List respects offset and limit for documents."""
+        client = await self._create_client(svc_client, test_user)
+        for _ in range(10):
+            await svc_doc.create(
+                user_id=test_user.id,
+                client_id=client.id,
+                document_type="pan_card",
+                issue_date=date(2024, 1, 1),
+            )
+        page1, total = await svc_doc.list_all(test_user.id, offset=0, limit=3)
+        assert total == 10
+        assert len(page1) == 3
+
+        page2, total = await svc_doc.list_all(test_user.id, offset=3, limit=3)
+        assert len(page2) == 3

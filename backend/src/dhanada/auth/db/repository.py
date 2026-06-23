@@ -7,11 +7,13 @@ from typing import Any, TypeVar, cast
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dhanada.auth.models.app import App
 from dhanada.auth.models.base import BaseModel
 from dhanada.auth.models.refresh_token import RefreshToken
 from dhanada.auth.models.role import Role, RolePermission, UserRole
 from dhanada.auth.models.totp import TOTPSecret
 from dhanada.auth.models.user import User
+from dhanada.auth.models.user_app import UserApp
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -322,4 +324,65 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
         )
         await self._session.flush()
         return cast(int, result.rowcount)  # type: ignore[attr-defined]
+
+
+class AppRepository(BaseRepository[App]):
+    """App-specific repository operations."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(App, session)
+
+    async def get_by_slug(self, slug: str) -> App | None:
+        result = await self._session.execute(select(App).where(App.slug == slug))
+        return result.scalar_one_or_none()
+
+    async def user_has_app(self, user_id: uuid.UUID, app_id: uuid.UUID) -> bool:
+        result = await self._session.execute(
+            select(UserApp).where(
+                UserApp.user_id == user_id,
+                UserApp.app_id == app_id,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def assign_user(
+        self,
+        user_id: uuid.UUID,
+        app_id: uuid.UUID,
+        *,
+        assigned_by_id: uuid.UUID | None = None,
+    ) -> UserApp:
+        existing = await self._session.execute(
+            select(UserApp).where(
+                UserApp.user_id == user_id,
+                UserApp.app_id == app_id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ValueError(f"User {user_id} is already assigned to app {app_id}")
+        user_app = UserApp(
+            user_id=user_id,
+            app_id=app_id,
+            assigned_by_id=assigned_by_id,
+        )
+        self._session.add(user_app)
+        await self._session.flush()
+        return user_app
+
+    async def remove_user(self, user_id: uuid.UUID, app_id: uuid.UUID) -> bool:
+        result = await self._session.execute(
+            delete(UserApp).where(
+                UserApp.user_id == user_id,
+                UserApp.app_id == app_id,
+            )
+        )
+        await self._session.flush()
+        return cast(bool, result.rowcount > 0)  # type: ignore[attr-defined]
+
+    async def get_user_apps(self, user_id: uuid.UUID) -> list[App]:
+        result = await self._session.execute(
+            select(UserApp).where(UserApp.user_id == user_id)
+        )
+        user_apps = result.scalars().all()
+        return [ua.app for ua in user_apps]
 

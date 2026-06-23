@@ -10,12 +10,13 @@ from fastapi.responses import StreamingResponse
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.db.session import DatabaseSession
-from dhanada.auth.exceptions import PermissionDeniedError
+from dhanada.auth.exceptions import PermissionDeniedError, UserNotFoundError
 from dhanada.auth.fastapi.dependencies import get_auth_manager, get_current_user
 from dhanada.auth.models.user import User
 from dhanada.crm.fastapi.schemas import (
     ClientCreateRequest,
     ClientDetailResponse,
+    ClientListParams,
     ClientPanUpdateRequest,
     ClientResponse,
     ClientUpdateRequest,
@@ -24,6 +25,7 @@ from dhanada.crm.fastapi.schemas import (
     DocumentPhotoEntry,
     DocumentResponse,
     DocumentUpdateRequest,
+    PaginatedResponse,
 )
 from dhanada.crm.services import ClientService, DocumentService
 
@@ -58,16 +60,27 @@ async def create_client(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
 
 
-@crm_router.get("/clients", response_model=list[ClientResponse])
+@crm_router.get("/clients", response_model=PaginatedResponse[ClientResponse])
 async def list_clients(
-    search: str | None = Query(None, max_length=255),  # noqa: B008
-    include_inactive: bool = Query(False),  # noqa: B008
+    params: ClientListParams = Depends(),  # noqa: B008
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
-) -> list[ClientResponse]:
+) -> PaginatedResponse[ClientResponse]:
     """List clients. Requires clients:read permission."""
-    clients = await service.list_all(user.id, search=search, include_inactive=include_inactive)
-    return [ClientResponse.model_validate(c) for c in clients]
+    include_inactive = params.status == "all" or params.status == "inactive"
+    clients, total = await service.list_all(
+        user.id,
+        search=params.search,
+        include_inactive=include_inactive,
+        offset=params.offset,
+        limit=params.limit,
+    )
+    return PaginatedResponse(
+        items=[ClientResponse.model_validate(c) for c in clients],
+        total=total,
+        offset=params.offset,
+        limit=params.limit,
+    )
 
 
 @crm_router.get("/clients/{client_id}", response_model=ClientResponse)
@@ -80,7 +93,7 @@ async def get_client(
     try:
         client = await service.get(user.id, client_id)
         return ClientResponse.model_validate(client)
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
         ) from None
@@ -97,7 +110,7 @@ async def update_client(
     try:
         client = await service.update(user.id, client_id, name=body.name)
         return ClientResponse.model_validate(client)
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
         ) from None
@@ -117,6 +130,36 @@ async def delete_client(
         ) from None
 
 
+@crm_router.post("/clients/{client_id}/restore", response_model=ClientResponse)
+async def restore_client(
+    client_id: UUID,
+    user: User = Depends(get_current_user),  # noqa: B008
+    service: ClientService = Depends(get_client_service),  # noqa: B008
+) -> ClientResponse:
+    """Restore a soft-deleted client. Requires clients:delete permission."""
+    try:
+        client = await service.restore(user.id, client_id)
+        return ClientResponse.model_validate(client)
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
+        ) from None
+
+
+@crm_router.delete("/clients/{client_id}/hard", status_code=status.HTTP_204_NO_CONTENT)
+async def hard_delete_client(
+    client_id: UUID,
+    user: User = Depends(get_current_user),  # noqa: B008
+    service: ClientService = Depends(get_client_service),  # noqa: B008
+) -> None:
+    """Permanently delete a soft-deleted client. Requires clients:delete permission."""
+    deleted = await service.hard_delete(user.id, client_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found or still active"
+        ) from None
+
+
 @crm_router.get("/clients/{client_id}/pan", response_model=ClientDetailResponse)
 async def get_client_pan(
     client_id: UUID,
@@ -125,12 +168,11 @@ async def get_client_pan(
 ) -> ClientDetailResponse:
     """Get client with decrypted PAN. Requires clients:manage-pan permission."""
     try:
-        client = await service.get(user.id, client_id)
-        pan = await service.get_pan(user.id, client_id)
+        client, pan = await service.get_with_pan(user.id, client_id)
         resp = ClientDetailResponse.model_validate(client)
         resp.pan = pan
         return resp
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
         ) from None
@@ -149,7 +191,7 @@ async def update_client_pan(
         return ClientResponse.model_validate(client)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
         ) from None
@@ -157,15 +199,13 @@ async def update_client_pan(
 
 @crm_router.post("/clients/export")
 async def export_clients(
-    include_pan: bool = Query(False),  # noqa: B008
     user: User = Depends(get_current_user),  # noqa: B008
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> StreamingResponse:
     """Export clients as CSV. Requires clients:export permission.
-
-    If include_pan=true, also requires clients:manage-pan permission.
+    PAN is included automatically if user has clients:manage-pan permission.
     """
-    csv_content = await service.export_csv(user.id, include_pan=include_pan)
+    csv_content = await service.export_csv(user.id)
     return StreamingResponse(
         io.StringIO(csv_content),
         media_type="text/csv",
@@ -242,22 +282,34 @@ async def create_document(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
 
 
-@crm_router.get("/documents", response_model=list[DocumentResponse])
+@crm_router.get("/documents", response_model=PaginatedResponse[DocumentResponse])
 async def list_documents(
     client_id: UUID | None = Query(None),  # noqa: B008
     document_type: str | None = Query(None, max_length=50),  # noqa: B008
-    include_inactive: bool = Query(False),  # noqa: B008
+    search: str | None = Query(None, max_length=200),  # noqa: B008
+    status: str = Query("active"),  # noqa: B008
+    offset: int = Query(0, ge=0),  # noqa: B008
+    limit: int = Query(100, ge=1, le=500),  # noqa: B008
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
-) -> list[DocumentResponse]:
+) -> PaginatedResponse[DocumentResponse]:
     """List documents. Requires documents:read permission."""
-    docs = await service.list_all(
+    include_inactive = status == "all" or status == "inactive"
+    docs, total = await service.list_all(
         user.id,
         client_id=client_id,
         document_type=document_type,
+        search=search,
         include_inactive=include_inactive,
+        offset=offset,
+        limit=limit,
     )
-    return [DocumentResponse.from_document(d) for d in docs]
+    return PaginatedResponse(
+        items=[DocumentResponse.from_document(d) for d in docs],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @crm_router.post("/documents/photos/batch", response_model=DocumentBatchPhotosResponse)
@@ -282,7 +334,7 @@ async def get_document(
     try:
         doc = await service.get(user.id, document_id)
         return DocumentResponse.from_document(doc)
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -307,7 +359,7 @@ async def get_document_front_photo(
         )
     except HTTPException:
         raise
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -332,7 +384,7 @@ async def get_document_back_photo(
         )
     except HTTPException:
         raise
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -359,7 +411,7 @@ async def update_document(
         return DocumentResponse.from_document(doc)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except Exception:
+    except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -376,4 +428,34 @@ async def delete_document(
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        ) from None
+
+
+@crm_router.post("/documents/{document_id}/restore", response_model=DocumentResponse)
+async def restore_document(
+    document_id: UUID,
+    user: User = Depends(get_current_user),  # noqa: B008
+    service: DocumentService = Depends(get_document_service),  # noqa: B008
+) -> DocumentResponse:
+    """Restore a soft-deleted document. Requires documents:delete permission."""
+    doc = await service.restore(user.id, document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        ) from None
+    return DocumentResponse.from_document(doc)
+
+
+@crm_router.delete("/documents/{document_id}/hard", status_code=status.HTTP_204_NO_CONTENT)
+async def hard_delete_document(
+    document_id: UUID,
+    user: User = Depends(get_current_user),  # noqa: B008
+    service: DocumentService = Depends(get_document_service),  # noqa: B008
+) -> None:
+    """Permanently delete a soft-deleted document. Requires documents:delete permission."""
+    deleted = await service.hard_delete(user.id, document_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or still active",
         ) from None

@@ -115,6 +115,9 @@ def auth_config() -> AuthConfig:
         database_url=TEST_DATABASE_URL,
         jwt_secret_key=TEST_JWT_SECRET,
         kek_base64=TEST_KEK_BASE64,
+        zeptomail_api_key="test-zeptomail-key",
+        zeptomail_from_email="test@dhanada.app",
+        pan_hmac_key="test-pan-hmac-key-min-16-chars",
     )  # type: ignore[call-arg]
 
 
@@ -141,7 +144,7 @@ async def test_user(auth_manager: AuthManager) -> User:
 
 
 @pytest_asyncio.fixture
-async def client_service(auth_manager: AuthManager, _test_user: User) -> ClientService:
+async def client_service(auth_manager: AuthManager) -> ClientService:
     """Create a ClientService with its own DB session."""
     from dhanada.auth.db.session import DatabaseSession
 
@@ -155,7 +158,7 @@ async def client_service(auth_manager: AuthManager, _test_user: User) -> ClientS
 
 
 @pytest_asyncio.fixture
-async def document_service(auth_manager: AuthManager, _test_user: User) -> DocumentService:
+async def document_service(auth_manager: AuthManager) -> DocumentService:
     """Create a DocumentService with its own DB session."""
     from dhanada.auth.db.session import DatabaseSession
 

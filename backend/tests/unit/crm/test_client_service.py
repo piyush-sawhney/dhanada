@@ -85,7 +85,8 @@ class TestClientService:
             name="Beta",
             pan="BBBBB2222B",
         )
-        clients = await client_service.list_all(test_user.id)
+        clients, total = await client_service.list_all(test_user.id)
+        assert total >= 2
         assert len(clients) >= 2
 
     async def test_list_search(self, client_service, test_user):
@@ -95,7 +96,8 @@ class TestClientService:
             name="UniqueName",
             pan="CCCCC3333C",
         )
-        results = await client_service.list_all(test_user.id, search="Unique")
+        results, total = await client_service.list_all(test_user.id, search="Unique")
+        assert total == 1
         assert len(results) == 1
         assert results[0].name == "UniqueName"
 
@@ -141,6 +143,48 @@ class TestClientService:
             name="CSV Corp",
             pan="HHHHH8888H",
         )
-        csv_content = await client_service.export_csv(test_user.id, include_pan=True)
+        csv_content = await client_service.export_csv(test_user.id)
         assert "name" in csv_content
         assert "CSV Corp" in csv_content
+
+    async def test_export_csv_includes_pan_when_permitted(self, client_service, test_user):
+        """Export CSV includes PAN column when user has manage-pan permission."""
+        await client_service.create(
+            user_id=test_user.id,
+            name="Pan Export",
+            pan="IIIII9999I",
+        )
+        csv_content = await client_service.export_csv(test_user.id)
+        assert "pan" in csv_content
+        assert "IIIII9999I" in csv_content
+
+    async def test_list_pagination(self, client_service, test_user):
+        """List should respect offset and limit."""
+        for i in range(10):
+            pan = f"AAAAA{i:04d}A"
+            await client_service.create(
+                user_id=test_user.id,
+                name=f"Client {i}",
+                pan=pan,
+            )
+        page1, total = await client_service.list_all(test_user.id, offset=0, limit=3)
+        assert total == 10
+        assert len(page1) == 3
+
+        page2, total = await client_service.list_all(test_user.id, offset=3, limit=3)
+        assert len(page2) == 3
+        assert page2[0].id != page1[0].id
+
+    async def test_list_with_status_all(self, client_service, test_user):
+        """List with include_inactive=True shows soft-deleted clients."""
+        client = await client_service.create(
+            user_id=test_user.id,
+            name="To Delete",
+            pan="JJJJJ0000J",
+        )
+        await client_service.soft_delete(test_user.id, client.id)
+        active, total_active = await client_service.list_all(test_user.id, include_inactive=False)
+        assert client.id not in [c.id for c in active]
+
+        all_clients, total_all = await client_service.list_all(test_user.id, include_inactive=True)
+        assert client.id in [c.id for c in all_clients]
