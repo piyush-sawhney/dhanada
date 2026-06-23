@@ -40,6 +40,10 @@ class AuthConfig(BaseSettings):
 
     # Envelope Encryption - Key Encryption Key (KEK)
     kek_base64: str = Field(description="Base64-encoded 32-byte KEK for envelope encryption")
+    kek_previous_base64_keys: list[str] = Field(
+        default_factory=list,
+        description="Previous KEKs for decryption during key rotation (oldest first)",
+    )
 
     # PAN HMAC Key
     pan_hmac_key: str = Field(
@@ -50,9 +54,6 @@ class AuthConfig(BaseSettings):
     # TOTP Configuration
     totp_issuer: str = Field(default="Dhanada", description="TOTP issuer name")
     totp_window: int = Field(default=1, description="TOTP verification window")
-
-    # Password Hashing
-    bcrypt_rounds: int = Field(default=12, description="Bcrypt rounds")
 
     # Account Lockout
     account_lockout_threshold: int = Field(
@@ -82,6 +83,12 @@ class AuthConfig(BaseSettings):
     password_reset_token_ttl_minutes: int = Field(
         default=60,
         description="Password reset token TTL in minutes",
+    )
+
+    # Document Storage
+    document_storage_path: str = Field(
+        default="./storage/documents",
+        description="Base directory for filesystem document storage",
     )
 
     # Application

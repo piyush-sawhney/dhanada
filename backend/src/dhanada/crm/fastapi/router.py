@@ -28,6 +28,7 @@ from dhanada.crm.fastapi.schemas import (
     PaginatedResponse,
 )
 from dhanada.crm.services import ClientService, DocumentService
+from dhanada.crm.storage import LocalFileStorage
 
 crm_router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -214,7 +215,8 @@ async def export_clients(
 
 
 ALLOWED_PHOTO_MIMES = {"image/jpeg", "image/jpg", "image/png"}
-MAX_PHOTO_SIZE = 5 * 1024 * 1024
+ALLOWED_FILE_MIMES: set[str] = set()  # empty set = all MIME types allowed
+MAX_ID_PHOTO_SIZE = 2 * 1024 * 1024  # 2MB for DB storage
 
 
 async def get_document_service(
@@ -222,9 +224,12 @@ async def get_document_service(
 ) -> AsyncGenerator[DocumentService, None]:
     """Dependency that creates a DocumentService with a tracked DB session."""
     db = DatabaseSession(str(auth.config.database_url))
+    storage = LocalFileStorage(auth.config.document_storage_path)
     try:
         async with db.session() as session:
-            yield DocumentService(session=session, auth=auth, envelope=auth._envelope)
+            yield DocumentService(
+                session=session, auth=auth, envelope=auth._envelope, storage=storage,
+            )
     finally:
         await db.close()
 
@@ -233,48 +238,77 @@ async def get_document_service(
 async def create_document(
     client_id: UUID = Form(...),  # noqa: B008
     document_type: str = Form(...),  # noqa: B008
+    is_id: bool = Form(True),  # noqa: B008
     issue_date: date = Form(...),  # noqa: B008
     document_number: str | None = Form(None),  # noqa: B008
     expiry_date: date | None = Form(None),  # noqa: B008
     document_type_other: str | None = Form(None),  # noqa: B008
     front_photo: UploadFile | None = File(None),  # noqa: B008
     back_photo: UploadFile | None = File(None),  # noqa: B008
+    file: UploadFile | None = File(None),  # noqa: B008
     user: User = Depends(get_current_user),  # noqa: B008
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
-    """Upload a document for a client. Requires documents:create permission."""
+    """Upload a document for a client. Requires documents:create permission.
+
+    - **ID documents** (``is_id=true``): use ``front_photo`` and optionally ``back_photo``.
+      Photos are encrypted and stored in the database (max 2 MB each).
+    - **Other documents** (``is_id=false``): use the ``file`` field.
+      The file is encrypted and stored on the filesystem (no size limit).
+    """
     try:
-        front_bytes, front_mime = None, None
-        if front_photo:
-            if front_photo.content_type not in ALLOWED_PHOTO_MIMES:
-                raise HTTPException(400, "front_photo must be JPEG or PNG")
-            front_bytes = await front_photo.read()
-            if len(front_bytes) > MAX_PHOTO_SIZE:
-                raise HTTPException(400, "front_photo exceeds 5MB limit")
-            front_mime = front_photo.content_type
+        if is_id:
+            _validate_is_id = True  # handled inline below
+            front_bytes, front_mime = None, None
+            if front_photo:
+                if front_photo.content_type not in ALLOWED_PHOTO_MIMES:
+                    raise HTTPException(400, "front_photo must be JPEG or PNG")
+                front_bytes = await front_photo.read()
+                if len(front_bytes) > MAX_ID_PHOTO_SIZE:
+                    raise HTTPException(400, "front_photo exceeds 2MB limit for ID storage")
+                front_mime = front_photo.content_type
 
-        back_bytes, back_mime = None, None
-        if back_photo:
-            if back_photo.content_type not in ALLOWED_PHOTO_MIMES:
-                raise HTTPException(400, "back_photo must be JPEG or PNG")
-            back_bytes = await back_photo.read()
-            if len(back_bytes) > MAX_PHOTO_SIZE:
-                raise HTTPException(400, "back_photo exceeds 5MB limit")
-            back_mime = back_photo.content_type
+            back_bytes, back_mime = None, None
+            if back_photo:
+                if back_photo.content_type not in ALLOWED_PHOTO_MIMES:
+                    raise HTTPException(400, "back_photo must be JPEG or PNG")
+                back_bytes = await back_photo.read()
+                if len(back_bytes) > MAX_ID_PHOTO_SIZE:
+                    raise HTTPException(400, "back_photo exceeds 2MB limit for ID storage")
+                back_mime = back_photo.content_type
 
-        doc = await service.create(
-            user_id=user.id,
-            client_id=client_id,
-            document_type=document_type,
-            issue_date=issue_date,
-            document_number=document_number or None,
-            expiry_date=expiry_date,
-            document_type_other=document_type_other,
-            front_photo=front_bytes,
-            front_photo_mime=front_mime,
-            back_photo=back_bytes,
-            back_photo_mime=back_mime,
-        )
+            doc = await service.create(
+                user_id=user.id,
+                client_id=client_id,
+                document_type=document_type,
+                issue_date=issue_date,
+                is_id=True,
+                document_number=document_number or None,
+                expiry_date=expiry_date,
+                document_type_other=document_type_other,
+                front_photo=front_bytes,
+                front_photo_mime=front_mime,
+                back_photo=back_bytes,
+                back_photo_mime=back_mime,
+            )
+        else:
+            file_bytes, file_mime = None, None
+            if file:
+                file_bytes = await file.read()
+                file_mime = file.content_type
+
+            doc = await service.create(
+                user_id=user.id,
+                client_id=client_id,
+                document_type=document_type,
+                issue_date=issue_date,
+                is_id=False,
+                document_number=document_number or None,
+                expiry_date=expiry_date,
+                document_type_other=document_type_other,
+                front_photo=file_bytes,
+                front_photo_mime=file_mime,
+            )
         return DocumentResponse.from_document(doc)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None

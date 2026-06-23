@@ -2,7 +2,10 @@
 
 import uuid
 from datetime import date
+from pathlib import Path
 
+import aiofiles
+import aiofiles.os
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dhanada.auth.db.session import DatabaseSession
 from dhanada.auth.exceptions import UserNotFoundError
 from dhanada.crm.services import ClientService, DocumentService
+from dhanada.crm.storage import LocalFileStorage, StorageBackend
 
 
 @pytest_asyncio.fixture
@@ -39,6 +43,19 @@ async def svc_doc(auth_manager, shared_session) -> DocumentService:
     )
 
 
+@pytest_asyncio.fixture
+async def svc_doc_with_storage(
+    auth_manager, shared_session, tmp_path: Path,
+) -> DocumentService:
+    storage: StorageBackend = LocalFileStorage(str(tmp_path))
+    return DocumentService(
+        session=shared_session,
+        auth=auth_manager,
+        envelope=auth_manager._envelope,
+        storage=storage,
+    )
+
+
 class TestDocumentService:
     async def _create_client(self, svc_client, test_user, name="Doc Test Client"):
         return await svc_client.create(
@@ -59,6 +76,7 @@ class TestDocumentService:
         assert doc.id is not None
         assert doc.document_type == "pan_card"
         assert doc.document_number is None
+        assert doc.is_id is True
         assert doc.front_photo_data is None
         assert doc.back_photo_data is None
         assert doc.is_active is True
@@ -474,3 +492,120 @@ class TestDocumentService:
 
         page2, total = await svc_doc.list_all(test_user.id, offset=3, limit=3)
         assert len(page2) == 3
+
+    # ── Non-ID (filesystem) document tests ──────────────────────────
+
+    async def test_create_non_id_document(
+        self, svc_doc_with_storage, svc_client, test_user, tmp_path: Path,
+    ):
+        """Non-ID document stores encrypted file on filesystem, not in DB."""
+        client = await self._create_client(svc_client, test_user)
+        file_bytes = b"fake_will_pdf_content"
+        doc = await svc_doc_with_storage.create(
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="will",
+            is_id=False,
+            issue_date=date(2024, 6, 1),
+            front_photo=file_bytes,
+            front_photo_mime="application/pdf",
+        )
+        assert doc.id is not None
+        assert doc.is_id is False
+        assert doc.document_type == "will"
+        assert doc.front_photo_data is None  # not in DB
+        assert doc.front_photo_path is not None  # path on filesystem
+        assert doc.back_photo_path is None
+
+        # File exists on disk
+        fs_path = tmp_path / doc.front_photo_path
+        assert fs_path.exists()
+        async with aiofiles.open(fs_path, "rb") as f:
+            stored = await f.read()
+        assert stored is not None  # encrypted bytes on disk
+
+    async def test_non_id_front_photo_roundtrip(
+        self, svc_doc_with_storage, svc_client, test_user,
+    ):
+        """Decrypted non-ID document file matches original bytes."""
+        original = b"fake_will_pdf_content_for_test"
+        client = await self._create_client(svc_client, test_user)
+        doc = await svc_doc_with_storage.create(
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="will",
+            is_id=False,
+            issue_date=date(2024, 6, 1),
+            front_photo=original,
+            front_photo_mime="application/pdf",
+        )
+        result = await svc_doc_with_storage.get_front_photo(test_user.id, doc.id)
+        assert result is not None
+        photo_bytes, mime = result
+        assert photo_bytes == original
+        assert mime == "application/pdf"
+
+    async def test_non_id_get_back_photo_returns_none(
+        self, svc_doc_with_storage, svc_client, test_user,
+    ):
+        """Non-ID documents never have a back photo."""
+        client = await self._create_client(svc_client, test_user)
+        doc = await svc_doc_with_storage.create(
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="poa",
+            is_id=False,
+            issue_date=date(2024, 6, 1),
+            front_photo=b"poa_content",
+            front_photo_mime="image/png",
+        )
+        result = await svc_doc_with_storage.get_back_photo(test_user.id, doc.id)
+        assert result is None
+
+    async def test_hard_delete_cleans_filesystem_file(
+        self, svc_doc_with_storage, svc_client, test_user, tmp_path: Path,
+    ):
+        """Hard-deleting a non-ID document removes its file from disk."""
+        client = await self._create_client(svc_client, test_user)
+        doc = await svc_doc_with_storage.create(
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="ekyc",
+            is_id=False,
+            issue_date=date(2024, 6, 1),
+            front_photo=b"ekyc_content",
+            front_photo_mime="image/jpeg",
+        )
+        path = doc.front_photo_path
+        assert path is not None
+        assert (tmp_path / path).exists()
+
+        # Soft delete first, then hard delete
+        await svc_doc_with_storage.soft_delete(test_user.id, doc.id)
+        deleted = await svc_doc_with_storage.hard_delete(test_user.id, doc.id)
+        assert deleted is True
+        assert not (tmp_path / path).exists()
+
+    async def test_batch_photos_includes_non_id_docs(
+        self, svc_doc_with_storage, svc_client, test_user,
+    ):
+        """Batch photos returns filesystem-based documents correctly."""
+        import base64
+
+        client = await self._create_client(svc_client, test_user)
+        doc = await svc_doc_with_storage.create(
+            user_id=test_user.id,
+            client_id=client.id,
+            document_type="will",
+            is_id=False,
+            issue_date=date(2024, 6, 1),
+            front_photo=b"batch_file_content",
+            front_photo_mime="application/pdf",
+        )
+        entries = await svc_doc_with_storage.get_photos_batch(test_user.id, [doc.id])
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["document_id"] == doc.id
+        assert entry["front_photo_base64"] == base64.b64encode(b"batch_file_content").decode()
+        assert entry["front_photo_mime"] == "application/pdf"
+        assert entry["back_photo_base64"] is None

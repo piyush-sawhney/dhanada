@@ -7,9 +7,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
-
-from dhanada.crm.models import DocumentType
+from pydantic import BaseModel, Field, field_validator
 
 if TYPE_CHECKING:
     from dhanada.crm.models import Document
@@ -80,25 +78,15 @@ class ClientListParams(BaseModel):
 class DocumentCreateRequest(BaseModel):
     client_id: UUID
     document_number: str | None = Field(None, max_length=100)
-    document_type: str = Field(..., max_length=50)
+    document_type: str = Field(..., max_length=50,
+        description="Document type label (e.g. pan_card, aadhaar, passport, will, poa)")
     document_type_other: str | None = Field(None, max_length=255)
+    is_id: bool = Field(
+        True,
+        description="True=ID (DB, front+back). False=other doc (filesystem, single file)",
+    )
     issue_date: date
     expiry_date: date | None = None
-
-    @field_validator("document_type")
-    @classmethod
-    def validate_document_type(cls, v: str) -> str:
-        valid = {t.value for t in DocumentType}
-        if v not in valid:
-            raise ValueError(f"Invalid document type. Must be one of: {', '.join(sorted(valid))}")
-        return v
-
-    @field_validator("document_type_other")
-    @classmethod
-    def validate_other_required(cls, v: str | None, info: ValidationInfo) -> str | None:
-        if info.data.get("document_type") == "other" and not v:
-            raise ValueError("document_type_other is required when document_type is 'other'")
-        return v
 
 
 class DocumentResponse(BaseModel):
@@ -107,6 +95,7 @@ class DocumentResponse(BaseModel):
     document_number: str | None
     document_type: str
     document_type_other: str | None
+    is_id: bool
     issue_date: date
     expiry_date: date | None
     has_front_photo: bool
@@ -118,16 +107,24 @@ class DocumentResponse(BaseModel):
 
     @classmethod
     def from_document(cls, doc: Document) -> DocumentResponse:
+        if doc.is_id:
+            has_front = doc.front_photo_data is not None
+            has_back = doc.back_photo_data is not None
+        else:
+            has_front = doc.front_photo_path is not None
+            has_back = False
+
         return cls(
             id=doc.id,
             client_id=doc.client_id,
             document_number=doc.document_number,
             document_type=doc.document_type,
             document_type_other=doc.document_type_other,
+            is_id=doc.is_id,
             issue_date=doc.issue_date,
             expiry_date=doc.expiry_date,
-            has_front_photo=doc.front_photo_data is not None,
-            has_back_photo=doc.back_photo_data is not None,
+            has_front_photo=has_front,
+            has_back_photo=has_back,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
         )
@@ -139,16 +136,6 @@ class DocumentUpdateRequest(BaseModel):
     document_type_other: str | None = None
     issue_date: date | None = None
     expiry_date: date | None = None
-
-    @field_validator("document_type")
-    @classmethod
-    def validate_document_type(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        valid = {t.value for t in DocumentType}
-        if v not in valid:
-            raise ValueError(f"Invalid document type. Must be one of: {', '.join(sorted(valid))}")
-        return v
 
 
 class DocumentBatchPhotosRequest(BaseModel):

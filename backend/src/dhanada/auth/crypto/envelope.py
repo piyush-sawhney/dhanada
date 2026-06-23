@@ -1,22 +1,24 @@
-"""Envelope encryption for TOTP secrets.
+"""Envelope encryption with key rotation support.
 
 Architecture:
     - KEK (Key Encryption Key): 32-byte key from env (base64-encoded)
     - DEK (Data Encryption Key): Random 32-byte key per secret
     - Encryption: AES-256-GCM (nonce: 12 bytes, tag: 16 bytes)
     - Key wrapping: AES-256-GCM wrapping of DEK with KEK
+    - Key rotation: Each payload stores the key_id used to wrap the DEK
 
 Flow:
     encrypt(plaintext):
         1. Generate random DEK (32 bytes)
         2. Encrypt plaintext with DEK using AES-256-GCM
-        3. Encrypt DEK with KEK using AES-256-GCM (key wrapping)
-        4. Return EncryptedPayload(ciphertext+tag, nonce, encrypted_dek)
+        3. Encrypt DEK with current KEK using AES-256-GCM (key wrapping)
+        4. Return EncryptedPayload(ciphertext+tag, nonce, encrypted_dek, key_id)
 
     decrypt(payload):
-        1. Decrypt DEK with KEK
-        2. Decrypt ciphertext with DEK
-        3. Return plaintext
+        1. Look up KEK by payload.key_id
+        2. Decrypt DEK with KEK
+        3. Decrypt ciphertext with DEK
+        4. Return plaintext
 """
 
 import os
@@ -42,15 +44,19 @@ class EncryptedPayload:
     encrypted_dek: bytes
     """DEK encrypted with KEK (ciphertext + 16-byte tag concatenated)."""
 
+    key_id: str = "kek_0"
+    """ID of the KEK used to wrap the DEK (for key rotation)."""
+
     @classmethod
     def from_components(
-        cls, ciphertext: bytes, nonce: bytes, encrypted_dek: bytes
+        cls, ciphertext: bytes, nonce: bytes, encrypted_dek: bytes, key_id: str = "kek_0"
     ) -> "EncryptedPayload":
         """Reconstruct an EncryptedPayload from stored components."""
         return cls(
             ciphertext=ciphertext,
             nonce=nonce,
             encrypted_dek=encrypted_dek,
+            key_id=key_id,
         )
 
 
@@ -58,7 +64,7 @@ class EnvelopeEncryption:
     """Envelope encryption for TOTP secrets using AES-256-GCM."""
 
     def __init__(self, kek_manager: KEKManager) -> None:
-        self._kek = kek_manager.kek
+        self._kek_manager = kek_manager
 
     def encrypt(self, plaintext: bytes) -> EncryptedPayload:
         """Encrypt data using envelope encryption.
@@ -69,27 +75,24 @@ class EnvelopeEncryption:
         Returns:
             EncryptedPayload containing all data needed for decryption.
         """
-        # 1. Generate random DEK
         dek = os.urandom(DEK_SIZE)
 
-        # 2. Encrypt plaintext with DEK using AES-GCM
         nonce = os.urandom(AES_GCM_NONCE_SIZE)
         aesgcm = AESGCM(dek)
         ciphertext = aesgcm.encrypt(nonce, plaintext, None)
 
-        # 3. Encrypt DEK with KEK using AES-GCM (key wrapping)
+        kek = self._kek_manager.current_key
         dek_nonce = os.urandom(AES_GCM_NONCE_SIZE)
-        kek_aesgcm = AESGCM(self._kek)
+        kek_aesgcm = AESGCM(kek)
         encrypted_dek = kek_aesgcm.encrypt(dek_nonce, dek, None)
 
-        # 4. Concatenate nonce and ciphertext for DEK wrapping
-        #    Format: nonce(12) + ciphertext(48 = 32 + 16)
         wrapped_dek = dek_nonce + encrypted_dek
 
         return EncryptedPayload(
             ciphertext=ciphertext,
             nonce=nonce,
             encrypted_dek=wrapped_dek,
+            key_id=self._kek_manager.current_key_id,
         )
 
     def decrypt(self, payload: EncryptedPayload) -> bytes:
@@ -102,14 +105,14 @@ class EnvelopeEncryption:
             Decrypted plaintext bytes.
         """
         try:
-            # 1. Decrypt DEK with KEK
+            kek = self._kek_manager.get_key(payload.key_id)
+
             dek_nonce = payload.encrypted_dek[:AES_GCM_NONCE_SIZE]
             dek_ciphertext = payload.encrypted_dek[AES_GCM_NONCE_SIZE:]
 
-            kek_aesgcm = AESGCM(self._kek)
+            kek_aesgcm = AESGCM(kek)
             dek = kek_aesgcm.decrypt(dek_nonce, dek_ciphertext, None)
 
-            # 2. Decrypt ciphertext with DEK
             aesgcm = AESGCM(dek)
             plaintext = aesgcm.decrypt(payload.nonce, payload.ciphertext, None)
 

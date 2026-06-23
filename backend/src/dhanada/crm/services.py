@@ -17,6 +17,7 @@ from dhanada.auth.exceptions import (
     UserNotFoundError,
 )
 from dhanada.crm.models import Client, Document, DocumentType, normalize_pan, validate_pan
+from dhanada.crm.storage import StorageBackend
 
 
 class ClientService:
@@ -48,6 +49,7 @@ class ClientService:
             encrypted_pan=encrypted.ciphertext,
             encrypted_nonce=encrypted.nonce,
             encrypted_dek=encrypted.encrypted_dek,
+            pan_encryption_key_id=encrypted.key_id,
             created_by_id=user_id,
         )
         return client
@@ -125,6 +127,7 @@ class ClientService:
             ciphertext=client.encrypted_pan,
             nonce=client.encrypted_nonce,
             encrypted_dek=client.encrypted_dek,
+            key_id=client.pan_encryption_key_id,
         )
         return self._envelope.decrypt(payload).decode()
 
@@ -147,6 +150,7 @@ class ClientService:
             encrypted_pan=encrypted.ciphertext,
             encrypted_nonce=encrypted.nonce,
             encrypted_dek=encrypted.encrypted_dek,
+            pan_encryption_key_id=encrypted.key_id,
         )
 
     async def get_with_pan(self, user_id: UUID, client_id: UUID) -> tuple[Client, str]:
@@ -160,6 +164,7 @@ class ClientService:
             ciphertext=client.encrypted_pan,
             nonce=client.encrypted_nonce,
             encrypted_dek=client.encrypted_dek,
+            key_id=client.pan_encryption_key_id,
         )
         pan = self._envelope.decrypt(payload).decode()
         return client, pan
@@ -191,6 +196,7 @@ class ClientService:
                     ciphertext=c.encrypted_pan,
                     nonce=c.encrypted_nonce,
                     encrypted_dek=c.encrypted_dek,
+                    key_id=c.pan_encryption_key_id,
                 )
                 pan = self._envelope.decrypt(payload).decode()
                 row.append(pan)
@@ -256,10 +262,12 @@ class DocumentService:
         session: AsyncSession,
         auth: AuthManager,
         envelope: EnvelopeEncryption,
+        storage: StorageBackend | None = None,
     ) -> None:
         self._session = session
         self._auth = auth
         self._envelope = envelope
+        self._storage = storage
 
     async def create(
         self,
@@ -267,6 +275,7 @@ class DocumentService:
         client_id: UUID,
         document_type: str,
         issue_date: date,
+        is_id: bool = True,
         document_number: str | None = None,
         expiry_date: date | None = None,
         document_type_other: str | None = None,
@@ -290,39 +299,56 @@ class DocumentService:
         if expiry_date and expiry_date <= issue_date:
             raise ValueError("expiry_date must be after issue_date")
 
-        front_data, front_nonce, front_dek = None, None, None
-        if front_photo is not None:
-            encrypted = self._envelope.encrypt(front_photo)
-            front_data = encrypted.ciphertext
-            front_nonce = encrypted.nonce
-            front_dek = encrypted.encrypted_dek
+        kwargs: dict[str, Any] = {
+            "client_id": client_id,
+            "document_number": document_number,
+            "document_type": document_type,
+            "document_type_other": document_type_other,
+            "issue_date": issue_date,
+            "expiry_date": expiry_date,
+            "is_id": is_id,
+            "created_by_id": user_id,
+        }
 
-        back_data, back_nonce, back_dek = None, None, None
-        if back_photo is not None:
-            encrypted = self._envelope.encrypt(back_photo)
-            back_data = encrypted.ciphertext
-            back_nonce = encrypted.nonce
-            back_dek = encrypted.encrypted_dek
+        if is_id:
+            if front_photo is not None:
+                encrypted = self._envelope.encrypt(front_photo)
+                kwargs["front_photo_data"] = encrypted.ciphertext
+                kwargs["front_photo_nonce"] = encrypted.nonce
+                kwargs["front_photo_dek"] = encrypted.encrypted_dek
+                kwargs["front_photo_key_id"] = encrypted.key_id
+                kwargs["front_photo_mime"] = front_photo_mime
 
-        doc = Document(
-            client_id=client_id,
-            document_number=document_number,
-            document_type=document_type,
-            document_type_other=document_type_other,
-            issue_date=issue_date,
-            expiry_date=expiry_date,
-            front_photo_data=front_data,
-            front_photo_nonce=front_nonce,
-            front_photo_dek=front_dek,
-            front_photo_mime=front_photo_mime,
-            back_photo_data=back_data,
-            back_photo_nonce=back_nonce,
-            back_photo_dek=back_dek,
-            back_photo_mime=back_photo_mime,
-            created_by_id=user_id,
-        )
+            if back_photo is not None:
+                encrypted = self._envelope.encrypt(back_photo)
+                kwargs["back_photo_data"] = encrypted.ciphertext
+                kwargs["back_photo_nonce"] = encrypted.nonce
+                kwargs["back_photo_dek"] = encrypted.encrypted_dek
+                kwargs["back_photo_key_id"] = encrypted.key_id
+                kwargs["back_photo_mime"] = back_photo_mime
+
+            doc = Document(**kwargs)
+            self._session.add(doc)
+            await self._session.flush()
+            return doc
+
+        # Non-ID documents: encrypted on filesystem
+        front_encrypted = self._envelope.encrypt(front_photo) if front_photo else None
+        if front_encrypted:
+            kwargs["front_photo_nonce"] = front_encrypted.nonce
+            kwargs["front_photo_dek"] = front_encrypted.encrypted_dek
+            kwargs["front_photo_key_id"] = front_encrypted.key_id
+            kwargs["front_photo_mime"] = front_photo_mime
+
+        doc = Document(**kwargs)
         self._session.add(doc)
         await self._session.flush()
+
+        if front_encrypted and self._storage is not None:
+            path = await self._storage.store(doc.id, "file", front_encrypted.ciphertext)
+            doc.front_photo_path = path
+            await self._session.flush()
+
         return doc
 
     async def get(self, user_id: UUID, document_id: UUID) -> Document:
@@ -457,9 +483,27 @@ class DocumentService:
         doc = result.scalar_one_or_none()
         if doc is None or doc.is_active:
             return False
+
+        if not doc.is_id and self._storage is not None and doc.front_photo_path:
+            await self._storage.delete(doc.front_photo_path)
+
         await self._session.execute(delete(Document).where(Document.id == document_id))
         await self._session.flush()
         return True
+
+    async def _get_ciphertext(self, doc: Document, side: str) -> bytes | None:
+        """Resolve the encrypted ciphertext for a document photo/file.
+
+        For ID documents the ciphertext is stored in a ``LargeBinary`` column.
+        For other documents it is read from the filesystem.
+        """
+        if doc.is_id:
+            return getattr(doc, f"{side}_photo_data", None)
+
+        path: str | None = getattr(doc, f"{side}_photo_path", None)
+        if path is None or self._storage is None:
+            return None
+        return await self._storage.retrieve(path)
 
     async def get_front_photo(self, user_id: UUID, document_id: UUID) -> tuple[bytes, str] | None:
         await self._auth.assert_permission(user_id, "documents", "read")
@@ -469,16 +513,20 @@ class DocumentService:
         doc = result.scalar_one_or_none()
         if doc is None:
             raise UserNotFoundError(f"Document {document_id} not found")
-        if doc.front_photo_data is None:
+
+        ciphertext = await self._get_ciphertext(doc, "front")
+        if ciphertext is None:
             return None
         if not all([doc.front_photo_nonce, doc.front_photo_dek, doc.front_photo_mime]):
             raise ValueError(
-                "Inconsistent encryption state: front_photo_data present but missing nonce/DEK/MIME"
+                "Inconsistent encryption state: front photo data present "
+                "but missing nonce/DEK/MIME"
             )
         payload = EncryptedPayload.from_components(
-            ciphertext=doc.front_photo_data,
+            ciphertext=ciphertext,
             nonce=doc.front_photo_nonce,
             encrypted_dek=doc.front_photo_dek,
+            key_id=doc.front_photo_key_id,
         )
         return self._envelope.decrypt(payload), doc.front_photo_mime
 
@@ -490,6 +538,8 @@ class DocumentService:
         doc = result.scalar_one_or_none()
         if doc is None:
             raise UserNotFoundError(f"Document {document_id} not found")
+        if not doc.is_id:
+            return None
         if doc.back_photo_data is None:
             return None
         if not all([doc.back_photo_nonce, doc.back_photo_dek, doc.back_photo_mime]):
@@ -500,6 +550,7 @@ class DocumentService:
             ciphertext=doc.back_photo_data,
             nonce=doc.back_photo_nonce,
             encrypted_dek=doc.back_photo_dek,
+            key_id=doc.back_photo_key_id,
         )
         return self._envelope.decrypt(payload), doc.back_photo_mime
 
@@ -518,21 +569,23 @@ class DocumentService:
         entries = []
         for doc in docs:
             front_base64, front_mime = None, None
-            if doc.front_photo_data is not None:
+            ciphertext = await self._get_ciphertext(doc, "front")
+            if ciphertext is not None:
                 if doc.front_photo_nonce is None or doc.front_photo_dek is None:
                     raise ValueError(
-                        "Inconsistent state: front_photo_data present but missing nonce/DEK"
+                        "Inconsistent state: front photo data present but missing nonce/DEK"
                     )
                 payload = EncryptedPayload.from_components(
-                    ciphertext=doc.front_photo_data,
+                    ciphertext=ciphertext,
                     nonce=doc.front_photo_nonce,
                     encrypted_dek=doc.front_photo_dek,
+                    key_id=doc.front_photo_key_id,
                 )
                 front_base64 = base64.b64encode(self._envelope.decrypt(payload)).decode()
                 front_mime = doc.front_photo_mime
 
             back_base64, back_mime = None, None
-            if doc.back_photo_data is not None:
+            if doc.is_id and doc.back_photo_data is not None:
                 if doc.back_photo_nonce is None or doc.back_photo_dek is None:
                     raise ValueError(
                         "Inconsistent state: back_photo_data present but missing nonce/DEK"
@@ -541,6 +594,7 @@ class DocumentService:
                     ciphertext=doc.back_photo_data,
                     nonce=doc.back_photo_nonce,
                     encrypted_dek=doc.back_photo_dek,
+                    key_id=doc.back_photo_key_id,
                 )
                 back_base64 = base64.b64encode(self._envelope.decrypt(payload)).decode()
                 back_mime = doc.back_photo_mime

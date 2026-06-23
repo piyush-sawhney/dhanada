@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -48,6 +48,13 @@ class TOTPSecret(BaseModel):
         LargeBinary,
         nullable=False,
         comment="Data Encryption Key encrypted with KEK",
+    )
+    encryption_key_id: Mapped[str] = mapped_column(
+        Text(50),
+        nullable=False,
+        default="kek_0",
+        server_default="kek_0",
+        comment="KEK ID used to wrap the DEK (for key rotation)",
     )
 
     # TOTP configuration

@@ -54,7 +54,10 @@ class AuthManager:
         self._db = DatabaseSession(str(config.database_url))
 
         # Initialize crypto
-        kek_manager = KEKManager.from_env(config.kek_base64)
+        kek_manager = KEKManager.from_env(
+            config.kek_base64,
+            previous_base64_keys=config.kek_previous_base64_keys,
+        )
         self._envelope = EnvelopeEncryption(kek_manager)
 
         # Initialize primitives
@@ -69,7 +72,7 @@ class AuthManager:
             access_token_expire_minutes=config.jwt_access_token_expire_minutes,
             refresh_token_expire_days=config.jwt_refresh_token_expire_days,
         )
-        self._password_manager = PasswordManager(bcrypt_rounds=config.bcrypt_rounds)
+        self._password_manager = PasswordManager()
         self._lockout_threshold = config.account_lockout_threshold
         self._lockout_minutes = config.account_lockout_minutes
         self._email_sender = EmailSender(config)

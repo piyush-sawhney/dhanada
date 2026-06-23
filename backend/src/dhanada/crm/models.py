@@ -60,6 +60,13 @@ class Client(CRMBaseModel):
         nullable=False,
         comment="Data Encryption Key encrypted with KEK",
     )
+    pan_encryption_key_id: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="kek_0",
+        server_default="kek_0",
+        comment="KEK ID used to wrap the DEK for this PAN",
+    )
 
     is_active: Mapped[bool] = mapped_column(
         Boolean,
@@ -141,6 +148,13 @@ class Document(CRMBaseModel):
         String(255),
         nullable=True,
     )
+    is_id: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        comment="True=ID (front+back, DB). False=other (single file, filesystem)",
+    )
+
     issue_date: Mapped[date] = mapped_column(
         Date,
         nullable=False,
@@ -150,6 +164,7 @@ class Document(CRMBaseModel):
         nullable=True,
     )
 
+    # --- ID documents (is_id=True): encrypted blobs in DB ---
     front_photo_data: Mapped[bytes | None] = mapped_column(
         LargeBinary,
         nullable=True,
@@ -162,11 +177,17 @@ class Document(CRMBaseModel):
         LargeBinary,
         nullable=True,
     )
+    front_photo_key_id: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="kek_0",
+        server_default="kek_0",
+        comment="KEK ID used to wrap the DEK for the front photo / other doc file",
+    )
     front_photo_mime: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
     )
-
     back_photo_data: Mapped[bytes | None] = mapped_column(
         LargeBinary,
         nullable=True,
@@ -179,9 +200,28 @@ class Document(CRMBaseModel):
         LargeBinary,
         nullable=True,
     )
+    back_photo_key_id: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="kek_0",
+        server_default="kek_0",
+        comment="KEK ID used to wrap the DEK for the back photo",
+    )
     back_photo_mime: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
+    )
+
+    # --- Other documents (is_id=False): encrypted files on filesystem ---
+    front_photo_path: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Relative path to encrypted file on filesystem",
+    )
+    back_photo_path: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Relative path to encrypted file on filesystem (unused for other docs)",
     )
 
     is_active: Mapped[bool] = mapped_column(

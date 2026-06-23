@@ -85,10 +85,11 @@ class TOTPService:
 
         await self._totp_repo.upsert(
             user_id=user_id,
-            encrypted_secret=enrollment.encrypted_secret.ciphertext,
-            encrypted_nonce=enrollment.encrypted_secret.nonce,
-            encrypted_dek=enrollment.encrypted_secret.encrypted_dek,
-            backup_codes=hashed_backup_codes,
+    encrypted_secret=enrollment.encrypted_secret.ciphertext,
+    encrypted_nonce=enrollment.encrypted_secret.nonce,
+    encrypted_dek=enrollment.encrypted_secret.encrypted_dek,
+    encryption_key_id=enrollment.encrypted_secret.key_id,
+    backup_codes=hashed_backup_codes,
             is_verified=False,
         )
 
@@ -140,6 +141,7 @@ class TOTPService:
                 ciphertext=totp.encrypted_secret,
                 nonce=totp.encrypted_nonce,
                 encrypted_dek=totp.encrypted_dek,
+                key_id=totp.encryption_key_id,
             )
         )
 
@@ -193,6 +195,7 @@ class TOTPService:
                 ciphertext=totp.encrypted_secret,
                 nonce=totp.encrypted_nonce,
                 encrypted_dek=totp.encrypted_dek,
+                key_id=totp.encryption_key_id,
             )
         )
         return self._totp_manager.verify(secret, token)
