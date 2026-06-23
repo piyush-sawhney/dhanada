@@ -20,7 +20,6 @@ from fastapi.responses import StreamingResponse
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.db.session import DatabaseSession
-from dhanada.auth.exceptions import DocumentNotFoundError, PermissionDeniedError, UserNotFoundError
 from dhanada.auth.fastapi.dependencies import get_auth_manager, get_current_user
 from dhanada.auth.models.user import User
 from dhanada.auth.rate_limit import limiter
@@ -70,8 +69,6 @@ async def create_client(
         return ClientResponse.model_validate(client)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
 
 
 @crm_router.get("/clients", response_model=PaginatedResponse[ClientResponse])
@@ -108,13 +105,8 @@ async def get_client(
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
     """Get a client by ID. Requires clients:read permission."""
-    try:
-        client = await service.get(user.id, client_id)
-        return ClientResponse.model_validate(client)
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
-        ) from None
+    client = await service.get(user.id, client_id)
+    return ClientResponse.model_validate(client)
 
 
 @crm_router.patch("/clients/{client_id}", response_model=ClientResponse)
@@ -127,13 +119,8 @@ async def update_client(
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
     """Update client name. Requires clients:edit permission."""
-    try:
-        client = await service.update(user.id, client_id, name=body.name)
-        return ClientResponse.model_validate(client)
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
-        ) from None
+    client = await service.update(user.id, client_id, name=body.name)
+    return ClientResponse.model_validate(client)
 
 
 @crm_router.delete("/clients/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -161,13 +148,8 @@ async def restore_client(
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientResponse:
     """Restore a soft-deleted client. Requires clients:delete permission."""
-    try:
-        client = await service.restore(user.id, client_id)
-        return ClientResponse.model_validate(client)
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
-        ) from None
+    client = await service.restore(user.id, client_id)
+    return ClientResponse.model_validate(client)
 
 
 @crm_router.delete("/clients/{client_id}/hard", status_code=status.HTTP_204_NO_CONTENT)
@@ -195,15 +177,10 @@ async def get_client_pan(
     service: ClientService = Depends(get_client_service),  # noqa: B008
 ) -> ClientDetailResponse:
     """Get client with decrypted PAN. Requires clients:manage-pan permission."""
-    try:
-        client, pan = await service.get_with_pan(user.id, client_id)
-        resp = ClientDetailResponse.model_validate(client)
-        resp.pan = pan
-        return resp
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
-        ) from None
+    client, pan = await service.get_with_pan(user.id, client_id)
+    resp = ClientDetailResponse.model_validate(client)
+    resp.pan = pan
+    return resp
 
 
 @crm_router.patch("/clients/{client_id}/pan", response_model=ClientResponse)
@@ -221,10 +198,6 @@ async def update_client_pan(
         return ClientResponse.model_validate(client)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Client not found"
-        ) from None
 
 
 @crm_router.post("/clients/export")
@@ -346,8 +319,6 @@ async def create_document(
         return DocumentResponse.from_document(doc)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except PermissionDeniedError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
 
 
 @crm_router.get("/documents", response_model=PaginatedResponse[DocumentResponse])
@@ -405,13 +376,8 @@ async def get_document(
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
     """Get a document by ID (metadata only, no photos). Requires documents:read permission."""
-    try:
-        doc = await service.get(user.id, document_id)
-        return DocumentResponse.from_document(doc)
-    except (UserNotFoundError, DocumentNotFoundError):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        ) from None
+    doc = await service.get(user.id, document_id)
+    return DocumentResponse.from_document(doc)
 
 
 @crm_router.get("/documents/{document_id}/photo/front")
@@ -423,22 +389,15 @@ async def get_document_front_photo(
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> StreamingResponse:
     """Stream decrypted front photo. Requires documents:read permission."""
-    try:
-        result = await service.get_front_photo(user.id, document_id)
-        if result is None:
-            raise HTTPException(status_code=404, detail="No front photo")
-        photo_bytes, mime = result
-        return StreamingResponse(
-            io.BytesIO(photo_bytes),
-            media_type=mime,
-            headers={"Content-Disposition": "inline"},
-        )
-    except HTTPException:
-        raise
-    except (UserNotFoundError, DocumentNotFoundError):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        ) from None
+    result = await service.get_front_photo(user.id, document_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No front photo")
+    photo_bytes, mime = result
+    return StreamingResponse(
+        io.BytesIO(photo_bytes),
+        media_type=mime,
+        headers={"Content-Disposition": "inline"},
+    )
 
 
 @crm_router.get("/documents/{document_id}/photo/back")
@@ -450,22 +409,15 @@ async def get_document_back_photo(
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> StreamingResponse:
     """Stream decrypted back photo. Requires documents:read permission."""
-    try:
-        result = await service.get_back_photo(user.id, document_id)
-        if result is None:
-            raise HTTPException(status_code=404, detail="No back photo")
-        photo_bytes, mime = result
-        return StreamingResponse(
-            io.BytesIO(photo_bytes),
-            media_type=mime,
-            headers={"Content-Disposition": "inline"},
-        )
-    except HTTPException:
-        raise
-    except (UserNotFoundError, DocumentNotFoundError):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        ) from None
+    result = await service.get_back_photo(user.id, document_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No back photo")
+    photo_bytes, mime = result
+    return StreamingResponse(
+        io.BytesIO(photo_bytes),
+        media_type=mime,
+        headers={"Content-Disposition": "inline"},
+    )
 
 
 @crm_router.patch("/documents/{document_id}", response_model=DocumentResponse)
@@ -491,10 +443,6 @@ async def update_document(
         return DocumentResponse.from_document(doc)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except (UserNotFoundError, DocumentNotFoundError):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        ) from None
 
 
 @crm_router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -522,16 +470,7 @@ async def restore_document(
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
     """Restore a soft-deleted document. Requires documents:delete permission."""
-    try:
-        doc = await service.restore(user.id, document_id)
-    except (UserNotFoundError, DocumentNotFoundError):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        ) from None
-    if doc is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        ) from None
+    doc = await service.restore(user.id, document_id)
     return DocumentResponse.from_document(doc)
 
 

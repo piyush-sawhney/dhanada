@@ -5,14 +5,17 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.config import AuthConfig
+from dhanada.auth.exceptions import PermissionDeniedError
 from dhanada.auth.fastapi.router import auth_router
 from dhanada.auth.rate_limit import limiter
+from dhanada.crm.exceptions import CRMError
 from dhanada.crm.fastapi.router import crm_router
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,17 @@ app = FastAPI(title="Dhanada", version="0.1.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.exception_handler(PermissionDeniedError)
+async def _permission_denied_handler(_request: Request, exc: PermissionDeniedError) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(CRMError)
+async def _crm_error_handler(_request: Request, exc: CRMError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
 
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(crm_router)

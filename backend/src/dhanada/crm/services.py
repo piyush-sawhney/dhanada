@@ -13,10 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.crypto.envelope import EncryptedPayload, EnvelopeEncryption
-from dhanada.auth.exceptions import (
-    DocumentNotFoundError,
-    UserNotFoundError,
-)
+from dhanada.crm.exceptions import ClientNotFoundError, DocumentNotFoundError
 from dhanada.crm.models import Client, Document, DocumentType
 from dhanada.crm.pan import normalize_pan, validate_pan
 from dhanada.crm.storage import StorageBackend
@@ -70,7 +67,7 @@ class ClientService:
         await self._auth.assert_permission(user_id, "clients", "read")
         client = await self._repo.get(client_id)
         if client is None or not client.is_active:
-            raise UserNotFoundError(f"Client {client_id} not found")
+            raise ClientNotFoundError(f"Client {client_id} not found")
         return client
 
     async def list_all(
@@ -93,7 +90,7 @@ class ClientService:
         await self._auth.assert_permission(user_id, "clients", "edit")
         client = await self._repo.get(client_id)
         if client is None or not client.is_active:
-            raise UserNotFoundError(f"Client {client_id} not found")
+            raise ClientNotFoundError(f"Client {client_id} not found")
 
         updates: dict[str, Any] = {}
         if name is not None:
@@ -121,7 +118,7 @@ class ClientService:
         await self._auth.assert_permission(user_id, "clients", "delete")
         client = await self._repo.get(client_id)
         if client is None:
-            raise UserNotFoundError(f"Client {client_id} not found")
+            raise ClientNotFoundError(f"Client {client_id} not found")
         if client.is_active:
             return client
         return await self._repo.update(
@@ -142,7 +139,7 @@ class ClientService:
         await self._auth.assert_permission(user_id, "clients", "manage-pan")
         client = await self._repo.get(client_id)
         if client is None or not client.is_active:
-            raise UserNotFoundError(f"Client {client_id} not found")
+            raise ClientNotFoundError(f"Client {client_id} not found")
 
         payload = EncryptedPayload.from_components(
             ciphertext=client.encrypted_pan,
@@ -156,7 +153,7 @@ class ClientService:
         await self._auth.assert_permission(user_id, "clients", "manage-pan")
         client = await self._repo.get(client_id)
         if client is None or not client.is_active:
-            raise UserNotFoundError(f"Client {client_id} not found")
+            raise ClientNotFoundError(f"Client {client_id} not found")
 
         pan_normalized = normalize_pan(pan)
         if not validate_pan(pan_normalized):
@@ -179,7 +176,7 @@ class ClientService:
         await self._auth.assert_permission(user_id, "clients", "manage-pan")
         client = await self._repo.get(client_id)
         if client is None or not client.is_active:
-            raise UserNotFoundError(f"Client {client_id} not found")
+            raise ClientNotFoundError(f"Client {client_id} not found")
 
         payload = EncryptedPayload.from_components(
             ciphertext=client.encrypted_pan,

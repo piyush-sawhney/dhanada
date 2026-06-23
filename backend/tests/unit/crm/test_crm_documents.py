@@ -11,7 +11,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dhanada.auth.db.session import DatabaseSession
-from dhanada.auth.exceptions import DocumentNotFoundError, UserNotFoundError
+from dhanada.crm.exceptions import DocumentNotFoundError
 from dhanada.crm.services import ClientService, DocumentService
 from dhanada.crm.storage import LocalFileStorage, StorageBackend
 

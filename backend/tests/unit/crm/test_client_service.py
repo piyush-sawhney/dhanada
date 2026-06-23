@@ -3,7 +3,8 @@
 import uuid
 
 import pytest
-from dhanada.auth.exceptions import UserNotFoundError
+
+from dhanada.crm.exceptions import ClientNotFoundError
 
 
 class TestClientService:
@@ -57,7 +58,7 @@ class TestClientService:
 
     async def test_get_nonexistent_raises(self, client_service, test_user):
         """Getting a non-existent client should raise."""
-        with pytest.raises(UserNotFoundError):
+        with pytest.raises(ClientNotFoundError):
             await client_service.get(test_user.id, uuid.uuid4())
 
     async def test_get_soft_deleted_raises(self, client_service, test_user):
@@ -68,7 +69,7 @@ class TestClientService:
             pan="FGHIJ5678F",
         )
         await client_service.soft_delete(test_user.id, client.id)
-        with pytest.raises(UserNotFoundError):
+        with pytest.raises(ClientNotFoundError):
             await client_service.get(test_user.id, client.id)
 
     async def test_list_clients(self, client_service, test_user):

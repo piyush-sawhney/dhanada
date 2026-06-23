@@ -559,12 +559,17 @@ async def assign_role(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
     """Assign a role to a user. Requires roles:assign permission."""
-    assigned = await auth.assign_role(
-        user_id,
-        body.role_name,
-        current_user_id=user.id,
-    )
-    return {"assigned": assigned}
+    try:
+        assigned = await auth.assign_role(
+            user_id,
+            body.role_name,
+            current_user_id=user.id,
+        )
+        return {"assigned": assigned}
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
 
 
 @auth_router.get(
@@ -577,7 +582,12 @@ async def get_roles(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> list[str]:
     """Get roles for a user. Requires roles:read permission."""
-    return await auth.get_user_roles(user_id)
+    try:
+        return await auth.get_user_roles(user_id)
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
 
 
 @auth_router.get(
@@ -905,13 +915,18 @@ async def revoke_role(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
     """Revoke a role from a user. Requires roles:assign permission."""
-    revoked = await auth.revoke_role(user_id, body.role_name)
-    if not revoked:
+    try:
+        revoked = await auth.revoke_role(user_id, body.role_name)
+        if not revoked:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User or role not found",
+            )
+        return {"revoked": True}
+    except UserNotFoundError:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User or role not found",
-        )
-    return {"revoked": True}
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
 
 
 @auth_router.delete(

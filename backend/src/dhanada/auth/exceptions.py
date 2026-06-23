@@ -1,18 +1,10 @@
 """Authentication exceptions."""
 
+from dhanada.exceptions import DhanadaError
 
-class AuthError(Exception):
+
+class AuthError(DhanadaError):
     """Base authentication error."""
-
-    def __init__(self, message: str, *, hint: str | None = None) -> None:
-        super().__init__(message)
-        self.message = message
-        self.hint = hint
-
-    def __str__(self) -> str:
-        if self.hint:
-            return f"{self.message} (Hint: {self.hint})"
-        return self.message
 
 
 class AuthenticationError(AuthError):
@@ -33,10 +25,6 @@ class TokenExpiredError(AuthError):
 
 class UserNotFoundError(AuthError):
     """User not found."""
-
-
-class DocumentNotFoundError(AuthError):
-    """Document not found."""
 
 
 class UserAlreadyExistsError(AuthError):

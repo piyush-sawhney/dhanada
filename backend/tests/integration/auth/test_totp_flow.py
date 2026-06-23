@@ -1,11 +1,8 @@
 """Integration tests for TOTP 2FA flows."""
 
+
 import pytest
-from uuid import UUID
-
 from httpx import AsyncClient
-
-from dhanada.auth.api import AuthManager
 
 pytestmark = pytest.mark.asyncio
 

@@ -302,7 +302,9 @@ class JWTManager:
             type=payload["type"],
         )
 
-    def create_reset_token(self, user_id: uuid.UUID, ttl_minutes: int = 60, version: int = 0) -> str:
+    def create_reset_token(
+        self, user_id: uuid.UUID, ttl_minutes: int = 60, version: int = 0
+    ) -> str:
         """Create a password reset token (single-use).
 
         Args:
