@@ -38,6 +38,8 @@ async def app(auth_manager: AuthManager) -> FastAPI:
     async def _override_auth_manager():
         yield auth_manager
 
+    from dhanada.auth.rate_limit import limiter
+    limiter.enabled = False
     application.dependency_overrides[get_auth_manager] = _override_auth_manager
     application.include_router(auth_router, prefix="/api/auth")
     application.include_router(crm_router)

@@ -209,11 +209,13 @@ async def auth_manager(auth_config: AuthConfig) -> AsyncGenerator[AuthManager, N
 
 
 @pytest_asyncio.fixture
-async def test_user(auth_manager: AuthManager) -> User:
+async def test_user(auth_manager: AuthManager, request: pytest.FixtureRequest) -> User:
     """Create a test superuser for service tests."""
+    import uuid
+    suffix = uuid.uuid4().hex[:8]
     user = await auth_manager.register_user(
-        email="services.test@example.com",
-        username="servicestest",
+        email=f"services.{suffix}@example.com",
+        username=f"servicestest_{suffix}",
         password="ServiceTest123!",
         full_name="Service Test User",
     )

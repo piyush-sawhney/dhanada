@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from dhanada.auth.api import AuthManager
 from dhanada.auth.db.session import DatabaseSession
-from dhanada.auth.exceptions import PermissionDeniedError, UserNotFoundError
+from dhanada.auth.exceptions import DocumentNotFoundError, PermissionDeniedError, UserNotFoundError
 from dhanada.auth.fastapi.dependencies import get_auth_manager, get_current_user
 from dhanada.auth.models.user import User
 from dhanada.auth.rate_limit import limiter
@@ -408,7 +408,7 @@ async def get_document(
     try:
         doc = await service.get(user.id, document_id)
         return DocumentResponse.from_document(doc)
-    except UserNotFoundError:
+    except (UserNotFoundError, DocumentNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -435,7 +435,7 @@ async def get_document_front_photo(
         )
     except HTTPException:
         raise
-    except UserNotFoundError:
+    except (UserNotFoundError, DocumentNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -462,7 +462,7 @@ async def get_document_back_photo(
         )
     except HTTPException:
         raise
-    except UserNotFoundError:
+    except (UserNotFoundError, DocumentNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -491,7 +491,7 @@ async def update_document(
         return DocumentResponse.from_document(doc)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
-    except UserNotFoundError:
+    except (UserNotFoundError, DocumentNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         ) from None
@@ -522,7 +522,12 @@ async def restore_document(
     service: DocumentService = Depends(get_document_service),  # noqa: B008
 ) -> DocumentResponse:
     """Restore a soft-deleted document. Requires documents:delete permission."""
-    doc = await service.restore(user.id, document_id)
+    try:
+        doc = await service.restore(user.id, document_id)
+    except (UserNotFoundError, DocumentNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        ) from None
     if doc is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"

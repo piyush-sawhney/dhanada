@@ -3,8 +3,6 @@
 import uuid
 
 import pytest
-from sqlalchemy.exc import IntegrityError
-
 from dhanada.auth.exceptions import UserNotFoundError
 
 
@@ -39,7 +37,7 @@ class TestClientService:
             name="One",
             pan="ABCDE1234A",
         )
-        with pytest.raises(IntegrityError):
+        with pytest.raises(ValueError, match="already exists"):
             await client_service.create(
                 user_id=test_user.id,
                 name="Two",

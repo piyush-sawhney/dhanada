@@ -11,7 +11,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dhanada.auth.db.session import DatabaseSession
-from dhanada.auth.exceptions import UserNotFoundError
+from dhanada.auth.exceptions import DocumentNotFoundError, UserNotFoundError
 from dhanada.crm.services import ClientService, DocumentService
 from dhanada.crm.storage import LocalFileStorage, StorageBackend
 
@@ -163,7 +163,7 @@ class TestDocumentService:
 
     async def test_get_nonexistent_raises(self, svc_doc, test_user):
         """Getting a non-existent document should raise."""
-        with pytest.raises(UserNotFoundError):
+        with pytest.raises(DocumentNotFoundError):
             await svc_doc.get(test_user.id, uuid.uuid4())
 
     async def test_list_documents(self, svc_doc, svc_client, test_user):
@@ -187,8 +187,12 @@ class TestDocumentService:
 
     async def test_list_filter_by_client(self, svc_doc, svc_client, test_user):
         """List can filter by client_id."""
-        client1 = await self._create_client(svc_client, test_user, name="Client A")
-        client2 = await self._create_client(svc_client, test_user, name="Client B")
+        client1 = await svc_client.create(
+            user_id=test_user.id, name="Client A", pan="AAAAA1111A"
+        )
+        client2 = await svc_client.create(
+            user_id=test_user.id, name="Client B", pan="BBBBB2222B"
+        )
         await svc_doc.create(
             user_id=test_user.id,
             client_id=client1.id,
@@ -338,7 +342,7 @@ class TestDocumentService:
         )
         result = await svc_doc.soft_delete(test_user.id, doc.id)
         assert result is True
-        with pytest.raises(UserNotFoundError):
+        with pytest.raises(DocumentNotFoundError):
             await svc_doc.get(test_user.id, doc.id)
 
     async def test_soft_delete_nonexistent(self, svc_doc, test_user):

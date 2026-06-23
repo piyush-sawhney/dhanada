@@ -35,6 +35,10 @@ class UserNotFoundError(AuthError):
     """User not found."""
 
 
+class DocumentNotFoundError(AuthError):
+    """Document not found."""
+
+
 class UserAlreadyExistsError(AuthError):
     """User already exists."""
 

@@ -469,6 +469,281 @@ class TestDocumentCRUD:
         )
         assert resp.status_code == 400
 
+    async def test_document_wrong_front_mime(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """Creating a document with non-JPEG/PNG front photo should return 400."""
+        cl = await self._create_client(client, superuser_token, "DOCFM1234I")
+        resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+            files={
+                "front_photo": ("front.gif", io.BytesIO(b"gif-data"), "image/gif"),
+            },
+        )
+        assert resp.status_code == 400
+
+    async def test_document_back_photo_too_large(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """Creating a document with >2MB back photo should return 400."""
+        cl = await self._create_client(client, superuser_token, "DOCBL1234J")
+        large_photo = b"y" * (2 * 1024 * 1024 + 1)
+        resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+            files={
+                "front_photo": ("front.jpg", io.BytesIO(b"valid"), "image/jpeg"),
+                "back_photo": ("back.jpg", io.BytesIO(large_photo), "image/jpeg"),
+            },
+        )
+        assert resp.status_code == 400
+
+    async def test_document_wrong_back_mime(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """Creating a document with non-JPEG/PNG back photo should return 400."""
+        cl = await self._create_client(client, superuser_token, "DOCBM1234K")
+        resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+            files={
+                "front_photo": ("front.jpg", io.BytesIO(b"valid"), "image/jpeg"),
+                "back_photo": ("back.gif", io.BytesIO(b"gif-data"), "image/gif"),
+            },
+        )
+        assert resp.status_code == 400
+
+    async def test_create_non_id_document_without_file(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """Creating a non-ID document without a file should still succeed (no file)."""
+        cl = await self._create_client(client, superuser_token, "DOCNF1234L")
+        resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "invoice",
+                "is_id": "false",
+                "issue_date": "2024-05-10",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["has_front_photo"] is False
+        assert data["has_back_photo"] is False
+
+    async def test_get_document_front_photo_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """GET /photo/front on an ID doc without front photo should return 404."""
+        cl = await self._create_client(client, superuser_token, "DOCFN1234M")
+        doc_resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+        )
+        doc_id = doc_resp.json()["id"]
+        resp = await client.get(
+            f"/api/crm/documents/{doc_id}/photo/front",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_get_document_back_photo(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """GET /api/crm/documents/{id}/photo/back should stream photo."""
+        cl = await self._create_client(client, superuser_token, "DOCBP1234N")
+        photo_bytes = b"fake-back-jpeg"
+        doc_resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+            files={
+                "front_photo": ("front.jpg", io.BytesIO(b"front"), "image/jpeg"),
+                "back_photo": ("back.jpg", io.BytesIO(photo_bytes), "image/jpeg"),
+            },
+        )
+        doc_id = doc_resp.json()["id"]
+        photo_resp = await client.get(
+            f"/api/crm/documents/{doc_id}/photo/back",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert photo_resp.status_code == 200
+        assert photo_resp.content == photo_bytes
+
+    async def test_get_document_back_photo_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """GET /photo/back on an ID doc without back photo should return 404."""
+        cl = await self._create_client(client, superuser_token, "DOCBN1234O")
+        doc_resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+            files={"front_photo": ("front.jpg", io.BytesIO(b"front"), "image/jpeg")},
+        )
+        doc_id = doc_resp.json()["id"]
+        resp = await client.get(
+            f"/api/crm/documents/{doc_id}/photo/back",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_hard_delete_document(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """DELETE /api/crm/documents/{id}/hard should permanently delete."""
+        cl = await self._create_client(client, superuser_token, "DOCHD1234P")
+        doc_resp = await client.post(
+            "/api/crm/documents",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            data={
+                "client_id": cl["id"],
+                "document_type": "passport",
+                "is_id": "true",
+                "issue_date": "2024-01-15",
+            },
+            files={"front_photo": ("front.jpg", io.BytesIO(b"data"), "image/jpeg")},
+        )
+        doc_id = doc_resp.json()["id"]
+        await client.delete(
+            f"/api/crm/documents/{doc_id}",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        hard_resp = await client.delete(
+            f"/api/crm/documents/{doc_id}/hard",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert hard_resp.status_code == 204
+
+    async def test_update_client_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """PATCH /api/crm/clients/{id} with non-existent ID should return 404."""
+        resp = await client.patch(
+            "/api/crm/clients/00000000-0000-0000-0000-000000000000",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            json={"name": "Nope"},
+        )
+        assert resp.status_code == 404
+
+    async def test_soft_delete_client_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """DELETE /api/crm/clients/{id} with non-existent ID should return 404."""
+        resp = await client.delete(
+            "/api/crm/clients/00000000-0000-0000-0000-000000000000",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_hard_delete_client_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """DELETE /api/crm/clients/{id}/hard with non-existent ID should return 404."""
+        resp = await client.delete(
+            "/api/crm/clients/00000000-0000-0000-0000-000000000000/hard",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_restore_client_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """POST /api/crm/clients/{id}/restore with non-existent ID should return 404."""
+        resp = await client.post(
+            "/api/crm/clients/00000000-0000-0000-0000-000000000000/restore",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_get_client_pan_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """GET /api/crm/clients/{id}/pan with non-existent ID should return 404."""
+        resp = await client.get(
+            "/api/crm/clients/00000000-0000-0000-0000-000000000000/pan",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_update_client_pan_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """PATCH /api/crm/clients/{id}/pan with non-existent ID should return 404."""
+        resp = await client.patch(
+            "/api/crm/clients/00000000-0000-0000-0000-000000000000/pan",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+            json={"pan": "ABCDE1234F"},
+        )
+        assert resp.status_code == 404
+
+    async def test_soft_delete_document_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """DELETE /api/crm/documents/{id} with non-existent ID should return 404."""
+        resp = await client.delete(
+            "/api/crm/documents/00000000-0000-0000-0000-000000000000",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_restore_document_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """POST /api/crm/documents/{id}/restore with non-existent ID should return 404."""
+        resp = await client.post(
+            "/api/crm/documents/00000000-0000-0000-0000-000000000000/restore",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
+    async def test_hard_delete_document_not_found(
+        self, client: AsyncClient, superuser_token: str
+    ):
+        """DELETE /api/crm/documents/{id}/hard with non-existent ID should return 404."""
+        resp = await client.delete(
+            "/api/crm/documents/00000000-0000-0000-0000-000000000000/hard",
+            headers={"Authorization": f"Bearer {superuser_token}"},
+        )
+        assert resp.status_code == 404
+
 
 async def _ensure_permission(
     auth_manager: AuthManager,  # noqa: ARG001

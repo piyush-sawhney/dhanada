@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dhanada.auth.api import AuthManager
 from dhanada.auth.crypto.envelope import EncryptedPayload, EnvelopeEncryption
 from dhanada.auth.exceptions import (
+    DocumentNotFoundError,
     UserNotFoundError,
 )
 from dhanada.crm.models import Client, Document, DocumentType
@@ -119,7 +120,9 @@ class ClientService:
     async def restore(self, user_id: UUID, client_id: UUID) -> Client:
         await self._auth.assert_permission(user_id, "clients", "delete")
         client = await self._repo.get(client_id)
-        if client is None or client.is_active:
+        if client is None:
+            raise UserNotFoundError(f"Client {client_id} not found")
+        if client.is_active:
             return client
         return await self._repo.update(
             client_id,
@@ -389,7 +392,7 @@ class DocumentService:
         )
         doc = result.scalar_one_or_none()
         if doc is None:
-            raise UserNotFoundError(f"Document {document_id} not found")
+            raise DocumentNotFoundError(f"Document {document_id} not found")
         return doc
 
     async def list_all(
@@ -497,7 +500,9 @@ class DocumentService:
         await self._auth.assert_permission(user_id, "documents", "delete")
         result = await self._session.execute(select(Document).where(Document.id == document_id))
         doc = result.scalar_one_or_none()
-        if doc is None or doc.is_active:
+        if doc is None:
+            raise DocumentNotFoundError(f"Document {document_id} not found")
+        if doc.is_active:
             return doc
         result = await self._session.execute(
             update(Document)
@@ -543,7 +548,7 @@ class DocumentService:
         )
         doc = result.scalar_one_or_none()
         if doc is None:
-            raise UserNotFoundError(f"Document {document_id} not found")
+            raise DocumentNotFoundError(f"Document {document_id} not found")
 
         ciphertext = await self._get_ciphertext(doc, "front")
         if ciphertext is None:
@@ -567,7 +572,7 @@ class DocumentService:
         )
         doc = result.scalar_one_or_none()
         if doc is None:
-            raise UserNotFoundError(f"Document {document_id} not found")
+            raise DocumentNotFoundError(f"Document {document_id} not found")
         if not doc.is_id:
             return None
         if doc.back_photo_data is None:

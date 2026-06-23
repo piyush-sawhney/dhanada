@@ -1,9 +1,15 @@
 """Integration tests for TOTP 2FA flows."""
 
 import pytest
+from uuid import UUID
+
 from httpx import AsyncClient
 
+from dhanada.auth.api import AuthManager
+
 pytestmark = pytest.mark.asyncio
+
+_totp_shared: dict = {}
 
 
 class TestTOTPFlow:
@@ -17,8 +23,11 @@ class TestTOTPFlow:
     async def setup_totp_user(
         self, superuser_token: str, client: AsyncClient
     ):
-        """Create an active user for TOTP testing (once per instance)."""
-        if hasattr(self, "_totp_data"):
+        """Create an active user for TOTP testing (once per session)."""
+        if _totp_shared:
+            self._setup_token = _totp_shared["setup_token"]
+            self._totp_data = _totp_shared["totp_data"]
+            self._totp_token = _totp_shared.get("totp_token", self._setup_token)
             return
 
         resp = await client.post(
@@ -45,6 +54,25 @@ class TestTOTPFlow:
             headers={"Authorization": f"Bearer {self._setup_token}"},
         )
         self._totp_data = totp_resp.json()
+
+        import pyotp
+        totp = pyotp.TOTP(self._totp_data["secret"])
+        await client.post(
+            "/api/auth/totp/verify",
+            headers={"Authorization": f"Bearer {self._setup_token}"},
+            json={"token": totp.now()},
+        )
+
+        setup_resp = await client.post(
+            "/api/auth/setup-complete",
+            headers={"Authorization": f"Bearer {self._setup_token}"},
+            json={"new_password": "NewActivePass123!"},
+        )
+        self._totp_token = setup_resp.json()["access_token"]
+
+        _totp_shared["setup_token"] = self._setup_token
+        _totp_shared["totp_data"] = self._totp_data
+        _totp_shared["totp_token"] = self._totp_token
 
     async def test_enable_totp_returns_secret(self):
         """POST /totp/enable should return secret and provisioning URI."""
@@ -81,12 +109,12 @@ class TestTOTPFlow:
         assert resp.status_code == 400
 
     async def test_generate_backup_codes(
-        self, client: AsyncClient, superuser_token: str
+        self, client: AsyncClient
     ):
         """POST /totp/backup-codes should return backup codes."""
         resp = await client.post(
             "/api/auth/totp/backup-codes",
-            headers={"Authorization": f"Bearer {superuser_token}"},
+            headers={"Authorization": f"Bearer {self._totp_token}"},
         )
         assert resp.status_code == 200
         data = resp.json()
