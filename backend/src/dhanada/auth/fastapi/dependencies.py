@@ -39,6 +39,7 @@ from dhanada.auth.exceptions import (
     InvalidTokenError,
     PermissionDeniedError,
     TokenExpiredError,
+    UserNotFoundError,
 )
 from dhanada.auth.models.user import User
 
@@ -98,6 +99,11 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",
+        ) from None
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
         ) from None
 
 

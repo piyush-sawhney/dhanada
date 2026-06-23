@@ -90,7 +90,7 @@ disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q --cov=dhanada --cov-fail-under=85 --cov-report=term-missing"
+addopts = "-ra -q --cov=dhanada --cov-fail-under=85 --cov-report=term-missing -p no:flask"
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
