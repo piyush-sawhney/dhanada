@@ -19,7 +19,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "apps",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("slug", sa.String(50), unique=True, index=True, nullable=False),
         sa.Column("name", sa.String(100), nullable=False),
         sa.Column("schema_name", sa.String(50), nullable=False),
@@ -51,7 +51,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "user_apps",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column(
             "user_id",
             UUID(as_uuid=True),

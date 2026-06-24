@@ -166,6 +166,13 @@ class AuthManager:
             )
             # Self-reference: the superuser is its own creator
             await user_repo.update(user.id, created_by_id=user.id)
+            # Mark inactive with 24h expiry so login forces TOTP setup flow
+            await user_repo.update(
+                user.id,
+                is_active=False,
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+                updated_by_id=user.id,
+            )
             AuditService.bootstrap_complete(
                 user_id=str(user.id),
                 ip_address=ip_address,
@@ -663,13 +670,14 @@ class AuthManager:
 
             user = await user_service.get_by_id(user_id)
 
-            # Only set password and activate for inactive users
+            # Only activate for inactive users; set password if provided
             if not user.is_active:
-                await user_service.set_password(
-                    user_id,
-                    new_password,
-                    updated_by_id=current_user_id,
-                )
+                if new_password:
+                    await user_service.set_password(
+                        user_id,
+                        new_password,
+                        updated_by_id=current_user_id,
+                    )
                 await user_service.activate_user(
                     user_id,
                     updated_by_id=current_user_id,

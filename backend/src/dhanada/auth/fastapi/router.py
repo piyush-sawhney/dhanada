@@ -35,7 +35,6 @@ from dhanada.auth.fastapi.schemas import (
     AdminResetUserAuthResponse,
     AdminUpdateUserRequest,
     AssignRoleRequest,
-    BootstrapCompleteResponse,
     BootstrapRequest,
     BootstrapStatusResponse,
     ChangePasswordRequest,
@@ -162,7 +161,7 @@ async def register(
 
 @auth_router.post(
     "/bootstrap",
-    response_model=BootstrapCompleteResponse,
+    response_model=SetupRequiredResponse,
     status_code=status.HTTP_201_CREATED,
     responses={409: {"model": ErrorResponse}},
 )
@@ -171,10 +170,10 @@ async def bootstrap(
     body: BootstrapRequest,
     request: Request,
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-) -> BootstrapCompleteResponse:
+) -> SetupRequiredResponse:
     """Register the first superuser. Only works when no users exist.
 
-    Returns auto-login tokens so the UI can immediately proceed to TOTP setup.
+    Returns a setup token so the UI can proceed to TOTP enrollment.
     """
     try:
         user = await auth.create_superuser(
@@ -182,17 +181,10 @@ async def bootstrap(
             username=body.username,
             password=body.password,
             full_name=body.full_name,
+            ip_address=_get_client_info(request)[1],
         )
-        user_agent, ip_address = _get_client_info(request)
-        tokens = await auth._create_tokens(user, user_agent, ip_address)
-        return BootstrapCompleteResponse(
-            user=_user_to_response(user),
-            access_token=tokens.access_token,
-            refresh_token=tokens.refresh_token,
-            token_type=tokens.token_type,
-            expires_in=tokens.expires_in,
-            totp_required=True,
-        )
+        setup_token = auth.generate_setup_token(user.id)
+        return SetupRequiredResponse(setup_token=setup_token)
     except SuperuserAlreadyExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
     except UserAlreadyExistsError as e:
@@ -539,7 +531,7 @@ async def disable_totp(
 @limiter.limit("3/minute")
 async def generate_backup_codes(
     request: Request,  # noqa: ARG001
-    user: User = Depends(get_current_user),  # noqa: B008
+    user: User = Depends(get_setup_or_active_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
     """Generate new backup codes (invalidates old ones)."""
