@@ -606,6 +606,8 @@ class AuthManager:
             user_repo = UserRepository(session)
             token_service = TokenService(token_repo, user_repo, self._jwt)
 
+            await user_repo.update_last_login(user.id)
+
             roles = [role.name for role in user.roles]
             permissions: list[str] = []
             for role in user.roles:
@@ -694,6 +696,7 @@ class AuthManager:
                 )
                 user = await user_service.get_by_id(user_id)
 
+            await user_service.update_last_login(user_id)
             token_service = TokenService(token_repo, user_repo, self._jwt)
             roles = [role.name for role in user.roles]
             permissions: list[str] = []
