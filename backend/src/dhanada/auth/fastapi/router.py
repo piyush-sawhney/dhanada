@@ -16,10 +16,10 @@ from dhanada.auth.exceptions import (
     InvalidCredentialsError,
     InvalidTokenError,
     SuperuserAlreadyExistsError,
+    TokenExpiredError,
     TOTPAlreadyEnabledError,
     TOTPError,
     TOTPNotEnabledError,
-    TokenExpiredError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
