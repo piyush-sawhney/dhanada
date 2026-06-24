@@ -57,7 +57,7 @@ const router = createRouter({
       path: "/verify-email",
       name: "verify-email",
       component: () => import("../views/VerifyEmailView.vue"),
-      meta: { layout: AuthLayout, guest: true },
+      meta: { layout: AuthLayout },
     },
     {
       path: "/dashboard",
@@ -139,7 +139,7 @@ router.beforeEach(async (to, _from) => {
   }
 
   // Guest routes (login, forgot-password, reset-password, recovery)
-  if (to.name === "login" || to.name === "forgot-password" || to.name === "reset-password" || to.name === "recovery-email-sent" || to.name === "recovery-approve" || to.name === "verify-email") {
+  if (to.name === "login" || to.name === "forgot-password" || to.name === "reset-password" || to.name === "recovery-email-sent" || to.name === "recovery-approve") {
     if (store.isAuthenticated) {
       return { name: "dashboard" }
     }

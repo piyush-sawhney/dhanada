@@ -1,7 +1,19 @@
 """Authentication configuration."""
 
+from pathlib import Path
+
 from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Walk up the tree to find .env from this file's location.
+_env_file: Path | None = None
+_current = Path(__file__).resolve().parent
+for _ in range(20):
+    candidate = _current / ".env"
+    if candidate.is_file():
+        _env_file = candidate
+        break
+    _current = _current.parent
 
 
 class AuthConfig(BaseSettings):
@@ -9,7 +21,7 @@ class AuthConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="DHANADA_AUTH_",
-        env_file=".env",
+        env_file=_env_file,
         env_file_encoding="utf-8",
         extra="ignore",
     )

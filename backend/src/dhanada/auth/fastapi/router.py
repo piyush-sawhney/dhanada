@@ -567,12 +567,12 @@ async def enable_totp(
 ) -> TOTPEnableResponse:
     """Enable TOTP two-factor authentication.
 
-    Works with both a regular JWT (active user, generates backup codes)
-    and a setup token (first-time flow, no backup codes).
+    Backup codes are only generated for superusers.
+    Works with both a regular JWT (active user) and a setup token (first-time flow).
     """
     try:
-        # Active superuser = generate backup codes; setup flow or non-superuser = no codes
-        generate_codes = user.is_superuser and user.is_active
+        # Superuser = generate backup codes; non-superuser = no codes
+        generate_codes = user.is_superuser
         result = await auth.enable_totp(
             user.id,
             generate_backup_codes=generate_codes,
