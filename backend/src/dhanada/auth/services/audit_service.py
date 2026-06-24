@@ -111,10 +111,23 @@ class AuditService:
     ) -> None:
         AuditService.log(
             "role_assigned",
-            user_id=user_id,
             actor_id=actor_id,
             ip_address=ip_address,
-            detail={"role": role_name},
+            detail={"user_id": user_id, "role_name": role_name},
+        )
+
+    @staticmethod
+    def role_revoked(
+        user_id: str,
+        role_name: str,
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        AuditService.log(
+            "role_revoked",
+            actor_id=actor_id,
+            ip_address=ip_address,
+            detail={"user_id": user_id, "role_name": role_name},
         )
 
     @staticmethod

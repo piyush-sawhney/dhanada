@@ -2,19 +2,17 @@
 import { shallowRef, onMounted } from "vue"
 import { useRouter } from "vue-router"
 import { useAuthStore } from "../stores/auth"
-import { totpEnable, totpVerify, generateBackupCodes } from "../api/auth"
+import { totpEnable, totpVerify } from "../api/auth"
 import TOTPInput from "../components/TOTPInput.vue"
 import QRCode from "qrcode"
 
 const router = useRouter()
 const store = useAuthStore()
 
-type Step = "qr" | "verify" | "backup-codes"
+type Step = "qr" | "verify"
 const step = shallowRef<Step>("qr")
 const qrDataUrl = shallowRef("")
 const secret = shallowRef("")
-const backupCodes = shallowRef<string[]>([])
-const backupCodesAcknowledged = shallowRef(false)
 const totpCode = shallowRef("")
 const error = shallowRef("")
 const loading = shallowRef(false)
@@ -46,8 +44,7 @@ async function verifyTOTP() {
 
   try {
     await totpVerify({ token: totpCode.value }, store.setupToken!)
-    backupCodes.value = await generateBackupCodes(store.setupToken!)
-    step.value = "backup-codes"
+    await completeSetup()
   } catch (err: any) {
     error.value = err.response?.data?.detail ?? "Invalid code. Try again."
     totpCode.value = ""
@@ -56,28 +53,12 @@ async function verifyTOTP() {
   }
 }
 
-function downloadBackupCodes() {
-  const content = backupCodes.value.join("\n")
-  const blob = new Blob([content], { type: "text/plain" })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = "dhanada-backup-codes.txt"
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
 async function completeSetup() {
-  error.value = ""
-  loading.value = true
-
   try {
     await store.completeSetup()
     router.push({ name: "dashboard" })
   } catch (err: any) {
     error.value = err.response?.data?.detail ?? "Failed to complete setup"
-  } finally {
-    loading.value = false
   }
 }
 </script>
@@ -112,7 +93,7 @@ async function completeSetup() {
       </button>
     </template>
 
-    <template v-else-if="step === 'verify'">
+    <template v-else>
       <p class="text-sm text-gray-500">Enter the 6-digit code from your authenticator app</p>
       <form @submit.prevent="verifyTOTP" class="space-y-5">
         <TOTPInput v-model="totpCode" />
@@ -124,38 +105,6 @@ async function completeSetup() {
           {{ loading ? "Verifying..." : "Verify" }}
         </button>
       </form>
-    </template>
-
-    <template v-else-if="step === 'backup-codes'">
-      <p class="text-sm text-gray-500">
-        Save these backup codes in a safe place. You can use each code once to log in if you lose access to your authenticator app.
-      </p>
-      <div class="rounded-lg border bg-gray-50 p-4 font-mono text-xs">
-        <div v-for="(code, i) in backupCodes" :key="i" class="py-0.5">{{ code }}</div>
-      </div>
-      <div class="flex gap-3">
-        <button
-          class="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-          @click="downloadBackupCodes"
-        >
-          Download
-        </button>
-      </div>
-      <label class="flex items-start gap-2 text-sm text-gray-600">
-        <input
-          v-model="backupCodesAcknowledged"
-          type="checkbox"
-          class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-        />
-        <span>I have saved my backup codes</span>
-      </label>
-      <button
-        :disabled="!backupCodesAcknowledged || loading"
-        class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        @click="completeSetup"
-      >
-        {{ loading ? "Completing..." : "Continue to Dashboard" }}
-      </button>
     </template>
   </div>
 </template>

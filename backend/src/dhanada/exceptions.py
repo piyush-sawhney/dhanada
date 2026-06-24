@@ -10,6 +10,4 @@ class DhanadaError(Exception):
         self.hint = hint
 
     def __str__(self) -> str:
-        if self.hint:
-            return f"{self.message} (Hint: {self.hint})"
         return self.message

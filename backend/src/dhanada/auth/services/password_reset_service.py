@@ -57,7 +57,7 @@ class PasswordResetService:
             Always True (to prevent email enumeration).
         """
         user = await self._user_repo.get_by_email(email)
-        if user is None or user.deleted_at is not None:
+        if user is None or user.deleted_at is not None or not user.email_verified:
             return True
 
         token = self._jwt.create_reset_token(
@@ -68,7 +68,7 @@ class PasswordResetService:
         if self._email_sender is not None:
             await self._email_sender.send_password_reset_email(
                 to=user.email,
-                username=user.username,
+                full_name=user.full_name,
                 reset_url=reset_url,
             )
 

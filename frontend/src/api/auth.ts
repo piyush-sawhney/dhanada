@@ -1,8 +1,10 @@
 import type {
+  AppResponse,
   BootstrapRequest,
   BootstrapStatusResponse,
   LoginRequest,
   LoginResponse,
+  RecoveryRequiredResponse,
   SetupCompleteRequest,
   TokenResponse,
   TOTPEnableResponse,
@@ -59,6 +61,11 @@ export async function logoutAll(): Promise<void> {
   await api.post("/api/auth/logout-all")
 }
 
+export async function getMyApps(): Promise<AppResponse[]> {
+  const { data } = await api.get("/api/auth/apps")
+  return data
+}
+
 export async function generateBackupCodes(setupToken: string): Promise<string[]> {
   const { data } = await api.post("/api/auth/totp/backup-codes", {}, {
     headers: { Authorization: `Bearer ${setupToken}` },
@@ -77,4 +84,14 @@ export async function forgotPassword(email: string): Promise<void> {
 
 export async function resetPassword(token: string, newPassword: string): Promise<void> {
   await api.post("/api/auth/reset-password", { token, new_password: newPassword })
+}
+
+export async function approveRecovery(token: string): Promise<{ setup_token: string }> {
+  const { data } = await api.post("/api/auth/recovery/approve", { token })
+  return data
+}
+
+export async function recoveryRequest(email: string, password: string): Promise<RecoveryRequiredResponse> {
+  const { data } = await api.post("/api/auth/recovery/request", { email, password })
+  return data
 }

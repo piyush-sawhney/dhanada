@@ -34,6 +34,10 @@ class UserAlreadyExistsError(AuthError):
 class AccountLockedError(AuthError):
     """Account is temporarily locked due to too many failed attempts."""
 
+    def __init__(self, message: str, *, locked_until: str | None = None) -> None:
+        super().__init__(message)
+        self.locked_until = locked_until
+
 
 class InvalidCredentialsError(AuthError):
     """Invalid username/email or password."""
@@ -69,6 +73,14 @@ class ConfigurationError(AuthError):
 
 class SuperuserAlreadyExistsError(AuthError):
     """Superuser already exists - bootstrap not allowed."""
+
+
+class CannotDeleteSelfError(AuthError):
+    """Cannot delete your own account."""
+
+
+class CannotModifySuperuserError(AuthError):
+    """Cannot deactivate, delete, or reset authentication for a superuser."""
 
 
 class CannotDeleteSystemRoleError(AuthError):

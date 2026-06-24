@@ -31,9 +31,11 @@ function handleKeydown(index: number, e: KeyboardEvent) {
 
 function handlePaste(e: ClipboardEvent) {
   const text = e.clipboardData?.getData("text") ?? ""
-  const chars = text.replace(/\D/g, "").split("").slice(0, 6)
-  chars.forEach((ch, i) => { digits.value[i] = ch })
-  requestAnimationFrame(() => inputs.value[Math.min(chars.length, 5)]?.focus())
+  const chars = text.replace(/\D/g, "").split("").slice(0, 16)
+  chars.forEach((ch, i) => {
+    if (i < 6) digits.value[i] = ch
+  })
+  requestAnimationFrame(() => inputs.value[Math.min(chars.length - 1, 5)]?.focus())
 }
 
 function setRef(el: unknown, index: number) {

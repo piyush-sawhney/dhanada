@@ -82,9 +82,21 @@ class UserRepository(BaseRepository[User]):
         )
         await self._session.flush()
 
-    async def delete(self, id: uuid.UUID, *, deleted_by_id: uuid.UUID | None = None) -> bool:
+    async def delete(
+        self,
+        id: uuid.UUID,
+        *,
+        deleted_by_id: uuid.UUID | None = None,
+        updated_by_id: uuid.UUID | None = None,
+    ) -> bool:
         now = datetime.now(UTC)
-        return await self.update(id, deleted_at=now, deleted_by_id=deleted_by_id) is not None
+        return await self.update(
+            id,
+            deleted_at=now,
+            deleted_by_id=deleted_by_id,
+            is_active=False,
+            updated_by_id=updated_by_id,
+        ) is not None
 
     async def hard_delete_expired_inactive(self) -> int:
         """Hard-delete inactive users whose account has expired."""
@@ -227,7 +239,14 @@ class RoleRepository(BaseRepository[Role]):
                     return True
         return False
 
-    async def add_permission(self, role_id: uuid.UUID, resource: str, action: str) -> bool:
+    async def add_permission(
+        self,
+        role_id: uuid.UUID,
+        resource: str,
+        action: str,
+        *,
+        created_by_id: uuid.UUID | None = None,
+    ) -> bool:
         """Add a permission to a role."""
         existing = await self._session.execute(
             select(RolePermission).where(
@@ -242,6 +261,7 @@ class RoleRepository(BaseRepository[Role]):
             role_id=role_id,
             resource=resource,
             action=action,
+            created_by_id=created_by_id,
         )
         self._session.add(permission)
         await self._session.flush()
@@ -371,6 +391,7 @@ class AppRepository(BaseRepository[App]):
         app_id: uuid.UUID,
         *,
         assigned_by_id: uuid.UUID | None = None,
+        created_by_id: uuid.UUID | None = None,
     ) -> UserApp:
         result = await self._session.execute(
             select(UserApp).where(
@@ -385,6 +406,7 @@ class AppRepository(BaseRepository[App]):
             user_id=user_id,
             app_id=app_id,
             assigned_by_id=assigned_by_id,
+            created_by_id=created_by_id,
         )
         self._session.add(user_app)
         await self._session.flush()
@@ -399,6 +421,11 @@ class AppRepository(BaseRepository[App]):
         )
         await self._session.flush()
         return cast(bool, result.rowcount > 0)  # type: ignore[attr-defined]
+
+    async def list_all(self) -> list[App]:
+        """Return all registered apps."""
+        result = await self._session.execute(select(App))
+        return list(result.scalars().all())
 
     async def get_user_apps(self, user_id: uuid.UUID) -> list[App]:
         result = await self._session.execute(select(UserApp).where(UserApp.user_id == user_id))

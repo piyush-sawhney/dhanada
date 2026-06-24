@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
-import { shallowRef, computed } from "vue"
-import type { UserResponse } from "../types/auth"
+import { ref, shallowRef, computed } from "vue"
+import type { AppResponse, UserResponse } from "../types/auth"
 import {
   getAccessToken, setAccessToken, setRefreshToken,
   getSetupToken, setSetupToken, clearSetupToken, clearTokens,
@@ -9,8 +9,10 @@ import * as authApi from "../api/auth"
 
 export const useAuthStore = defineStore("auth", () => {
   const user = shallowRef<UserResponse | null>(null)
+  const userApps = shallowRef<AppResponse[]>([])
   const accessToken = shallowRef<string | null>(getAccessToken())
   const setupToken = shallowRef<string | null>(getSetupToken())
+  const bootstrapChecked = ref(false)
 
   const isAuthenticated = computed(() => !!accessToken.value)
   const isSetupRequired = computed(() => !!setupToken.value)
@@ -31,6 +33,7 @@ export const useAuthStore = defineStore("auth", () => {
     setRefreshToken(tokens.refresh_token)
     setupToken.value = null
     clearSetupToken()
+    bootstrapChecked.value = true
   }
 
   async function login(email: string, password: string, totpToken?: string) {
@@ -42,10 +45,18 @@ export const useAuthStore = defineStore("auth", () => {
       return { type: "setup_required" as const, token: response.setup_token }
     }
 
+    if ("status" in response && response.status === "totp_required") {
+      return { type: "totp_required" as const }
+    }
+
     if ("access_token" in response) {
       setTokens(response)
       await fetchUser()
       return { type: "success" as const }
+    }
+
+    if ("status" in response && response.status === "recovery_email_sent") {
+      return { type: "recovery_email_sent" as const }
     }
 
     return { type: "error" as const }
@@ -85,7 +96,12 @@ export const useAuthStore = defineStore("auth", () => {
       user.value = null
       accessToken.value = null
       clearTokens()
+      bootstrapChecked.value = false
     }
+  }
+
+  async function fetchApps() {
+    userApps.value = await authApi.getMyApps()
   }
 
   async function checkAuth() {
@@ -96,11 +112,14 @@ export const useAuthStore = defineStore("auth", () => {
 
   return {
     user,
+    userApps,
     accessToken,
     setupToken,
+    bootstrapChecked,
     isAuthenticated,
     isSetupRequired,
     fetchUser,
+    fetchApps,
     login,
     bootstrap,
     completeSetup,

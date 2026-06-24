@@ -357,6 +357,61 @@ class JWTManager:
             ver=payload.get("ver", 0),
         )
 
+    def create_recovery_approval_token(
+        self, user_id: uuid.UUID, ttl_minutes: int = 15
+    ) -> str:
+        """Create a recovery approval token.
+
+        Sent via email when a backup code is used during login.
+        The user must click the link to approve account recovery.
+
+        Args:
+            user_id: User UUID.
+            ttl_minutes: Token TTL in minutes (default 15min).
+
+        Returns:
+            Signed JWT recovery approval token string.
+        """
+        now = datetime.now(UTC)
+        payload = {
+            "sub": str(user_id),
+            "exp": now + timedelta(minutes=ttl_minutes),
+            "iat": now,
+            "jti": str(uuid.uuid4()),
+            "type": "recovery_approval",
+        }
+        headers = {"kid": self._current_key_id}
+        return jwt.encode(
+            payload,
+            self._keys[self._current_key_id],
+            algorithm=self._algorithm,
+            headers=headers,
+        )
+
+    def verify_recovery_approval_token(self, token: str) -> TokenPayload:
+        """Verify and decode a recovery approval token.
+
+        Args:
+            token: JWT recovery approval token string.
+
+        Returns:
+            TokenPayload with decoded claims.
+
+        Raises:
+            TokenExpiredError: Token has expired.
+            InvalidTokenError: Token is malformed or wrong type.
+        """
+        payload = self._decode_token(token)
+        if payload.get("type") != "recovery_approval":
+            raise InvalidTokenError("Token is not a recovery approval token")
+        return TokenPayload(
+            sub=payload["sub"],
+            exp=payload["exp"],
+            iat=payload["iat"],
+            jti=payload["jti"],
+            type=payload["type"],
+        )
+
     def _decode_token(self, token: str) -> dict[str, Any]:
         """Decode and validate a JWT token.
 

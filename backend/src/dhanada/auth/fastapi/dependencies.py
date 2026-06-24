@@ -82,6 +82,11 @@ async def get_current_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account is inactive",
             )
+        if user.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account has been deleted",
+            )
         return user
     except TokenExpiredError:
         raise HTTPException(

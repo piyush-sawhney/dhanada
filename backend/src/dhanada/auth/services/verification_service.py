@@ -51,14 +51,14 @@ class VerificationService:
             return True
 
         token = self._jwt.create_verification_token(user_id, self._token_ttl)
-        verification_url = f"{self._base_url}/api/auth/verify-email?token={token}"
+        verification_url = f"{self._base_url}/verify-email?token={token}"
 
         if self._email_sender is None:
             return False
 
         return await self._email_sender.send_verification_email(
             to=user.email,
-            username=user.username,
+            full_name=user.full_name,
             verification_url=verification_url,
         )
 

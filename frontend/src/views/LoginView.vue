@@ -2,6 +2,7 @@
 import { shallowRef } from "vue"
 import { useRouter } from "vue-router"
 import { useAuthStore } from "../stores/auth"
+import { recoveryRequest } from "../api/auth"
 import TOTPInput from "../components/TOTPInput.vue"
 
 const router = useRouter()
@@ -13,9 +14,12 @@ const password = shallowRef("")
 const totpToken = shallowRef("")
 const error = shallowRef("")
 const loading = shallowRef(false)
+const requestingRecovery = shallowRef(false)
+const recoveryError = shallowRef("")
 
 async function submitCredentials() {
   error.value = ""
+  recoveryError.value = ""
   loading.value = true
 
   try {
@@ -23,19 +27,29 @@ async function submitCredentials() {
 
     if (result.type === "setup_required") {
       router.push({ name: "setup" })
+    } else if (result.type === "totp_required") {
+      step.value = "totp"
     } else if (result.type === "success") {
       router.push({ name: "dashboard" })
+    } else {
+      error.value = "Invalid email or password."
     }
   } catch (err: any) {
-    const status = err.response?.status
-    const detail = err.response?.data?.detail ?? ""
+    const data = err.response?.data ?? {}
+    const detail = data.detail ?? ""
 
-    if (status === 403 && detail.includes("TOTP")) {
-      step.value = "totp"
-    } else if (status === 429) {
-      error.value = detail || "Too many attempts. Please try again later."
+    if (err.response?.status === 429) {
+      const lockedUntil = data.locked_until
+      if (lockedUntil) {
+        const local = new Date(lockedUntil).toLocaleTimeString()
+        error.value = `Account locked. Try again at ${local}.`
+      } else {
+        error.value = detail || "Too many attempts. Please try again later."
+      }
+    } else if (err.response?.status === 409) {
+      error.value = detail || "Conflict."
     } else {
-      error.value = detail || "Invalid email or password"
+      error.value = detail || "Invalid email or password."
     }
   } finally {
     loading.value = false
@@ -44,10 +58,16 @@ async function submitCredentials() {
 
 async function submitTOTP() {
   error.value = ""
+  recoveryError.value = ""
   loading.value = true
 
   try {
     const result = await store.login(email.value, password.value, totpToken.value)
+
+    if (result.type === "recovery_email_sent") {
+      router.push({ name: "recovery-email-sent" })
+      return
+    }
 
     if (result.type === "success") {
       router.push({ name: "dashboard" })
@@ -63,9 +83,25 @@ async function submitTOTP() {
   }
 }
 
+async function requestRecovery() {
+  recoveryError.value = ""
+  error.value = ""
+  requestingRecovery.value = true
+
+  try {
+    await recoveryRequest(email.value, password.value)
+    router.push({ name: "recovery-email-sent" })
+  } catch (err: any) {
+    recoveryError.value = err.response?.data?.detail ?? "Could not send recovery email."
+  } finally {
+    requestingRecovery.value = false
+  }
+}
+
 function backToCredentials() {
   step.value = "credentials"
   error.value = ""
+  recoveryError.value = ""
 }
 </script>
 
@@ -123,13 +159,26 @@ function backToCredentials() {
     <template v-else>
       <TOTPInput v-model="totpToken" />
 
+      <div v-if="recoveryError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">{{ recoveryError }}</div>
+
       <button
         type="submit"
-        :disabled="loading || totpToken.length !== 6"
+        :disabled="loading || totpToken.length < 6"
         class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {{ loading ? "Verifying..." : "Verify" }}
       </button>
+
+      <div class="text-center">
+        <button
+          type="button"
+          :disabled="requestingRecovery"
+          class="text-sm text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+          @click="requestRecovery"
+        >
+          {{ requestingRecovery ? "Sending..." : "Lost your authenticator?" }}
+        </button>
+      </div>
 
       <button
         type="button"

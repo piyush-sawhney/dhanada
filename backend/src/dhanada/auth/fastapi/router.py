@@ -10,14 +10,16 @@ from dhanada.auth.api import AuthManager
 from dhanada.auth.exceptions import (
     AccountLockedError,
     AuthenticationError,
+    CannotDeleteSelfError,
     CannotDeleteSystemRoleError,
+    CannotModifySuperuserError,
     InvalidCredentialsError,
     InvalidTokenError,
     SuperuserAlreadyExistsError,
-    TokenExpiredError,
     TOTPAlreadyEnabledError,
     TOTPError,
-    TOTPInvalidTokenError,
+    TOTPNotEnabledError,
+    TokenExpiredError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
@@ -32,8 +34,10 @@ from dhanada.auth.fastapi.dependencies import (
 from dhanada.auth.fastapi.schemas import (
     AddPermissionRequest,
     AdminCreateUserRequest,
+    AdminResendWelcomeResponse,
     AdminResetUserAuthResponse,
     AdminUpdateUserRequest,
+    AppResponse,
     AssignRoleRequest,
     BootstrapRequest,
     BootstrapStatusResponse,
@@ -45,6 +49,9 @@ from dhanada.auth.fastapi.schemas import (
     LoginRequest,
     PermissionCheckResponse,
     ProfileUpdateRequest,
+    RecoveryApproveRequest,
+    RecoveryRequest,
+    RecoveryRequiredResponse,
     RefreshRequest,
     RegisterUserAppRequest,
     ResetPasswordRequest,
@@ -61,6 +68,7 @@ from dhanada.auth.fastapi.schemas import (
     TokenResponse,
     TOTPDisableRequest,
     TOTPEnableResponse,
+    TOTPRequiredResponse,
     TOTPVerifyRequest,
     UnregisterUserAppRequest,
     UserAppListResponse,
@@ -143,6 +151,8 @@ async def register(
             if ok:
                 roles.append(body.role_name)
 
+        await auth.send_welcome_email(new_user.id, temp_password)
+
         return UserCreatedResponse(
             id=new_user.id,
             email=new_user.email,
@@ -150,7 +160,6 @@ async def register(
             full_name=new_user.full_name,
             is_active=False,
             is_superuser=new_user.is_superuser,
-            temporary_password=temp_password,
             roles=roles,
             created_at=new_user.created_at,
             updated_at=new_user.updated_at,
@@ -184,6 +193,7 @@ async def bootstrap(
             ip_address=_get_client_info(request)[1],
         )
         setup_token = auth.generate_setup_token(user.id)
+        await auth.send_verification_email(user.id)
         return SetupRequiredResponse(setup_token=setup_token)
     except SuperuserAlreadyExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
@@ -202,26 +212,44 @@ async def bootstrap_status(
     return BootstrapStatusResponse(needs_bootstrap=not await auth.has_users())
 
 
+@auth_router.get(
+    "/apps",
+    response_model=list[AppResponse],
+)
+@limiter.limit("30/minute")
+async def get_my_apps(
+    request: Request,  # noqa: ARG001
+    user: User = Depends(get_current_user),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> list[AppResponse]:
+    """Get all apps the current user is registered to."""
+    apps = await auth.get_user_apps(user.id)
+    return [AppResponse(slug=a.slug, name=a.name) for a in apps]
+
+
 @auth_router.post(
     "/login",
-    response_model=TokenResponse | SetupRequiredResponse,
+    response_model=TokenResponse | SetupRequiredResponse | TOTPRequiredResponse,
     responses={
         401: {"model": ErrorResponse},
-        403: {"model": ErrorResponse},
+        429: {"detail": str, "locked_until": str},
     },
 )
 @limiter.limit("5/minute")
 async def login(
     body: LoginRequest,
     request: Request,
-    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-) -> TokenResponse | SetupRequiredResponse:
+    auth: AuthManager = Depends(get_auth_manager),
+) -> TokenResponse | SetupRequiredResponse | RecoveryRequiredResponse | TOTPRequiredResponse:
     """Login with email and password.
 
     Flow:
     1. If user is inactive → returns a 15-minute setup token for TOTP enrollment + activation.
     2. If user is active but TOTP not enabled → returns a setup token (bootstrap case).
-    3. If user is active with TOTP → requires valid TOTP code, returns JWT tokens.
+    3. If user is active with TOTP → requires valid TOTP code.
+       a. TOTP code (6 digits) → returns JWT tokens.
+       b. Backup code (16 chars) → sends recovery email, returns RecoveryRequiredResponse.
+       c. No TOTP code or invalid code → returns TOTPRequiredResponse.
     """
     try:
         user_agent, ip_address = _get_client_info(request)
@@ -243,14 +271,21 @@ async def login(
             setup_token = auth.generate_setup_token(user.id)
             return SetupRequiredResponse(setup_token=setup_token)
 
-        # Normal login — TOTP is mandatory
+        # Normal login — TOTP or backup code
         if body.totp_token is None or not await auth.verify_totp(user.id, body.totp_token):
-            raise TOTPInvalidTokenError(
-                "TOTP code required",
-                hint="Provide your authenticator app code to complete login",
+            return TOTPRequiredResponse()
+
+        # Detect backup code usage (16 chars) vs TOTP code (6 digits)
+        if len(body.totp_token) == 16:
+            await auth.request_recovery(user)
+            return RecoveryRequiredResponse(
+                message=(
+                    "A recovery email has been sent to your email address. "
+                    "Please check your inbox and click the link to approve."
+                ),
             )
 
-        tokens = await auth._create_tokens(user, user_agent, ip_address)
+        tokens = await auth._create_tokens(user.id, user_agent, ip_address)
         return TokenResponse(
             access_token=tokens.access_token,
             refresh_token=tokens.refresh_token,
@@ -260,11 +295,71 @@ async def login(
     except AuthenticationError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
     except AccountLockedError as e:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)) from None
-    except TOTPInvalidTokenError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from None
+        content: dict[str, str] = {"detail": str(e)}
+        if e.locked_until:
+            content["locked_until"] = e.locked_until
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=content,
+        ) from None
     except InvalidCredentialsError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
+
+
+@auth_router.post(
+    "/recovery/request",
+    response_model=RecoveryRequiredResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+@limiter.limit("3/minute")
+async def recovery_request(
+    body: RecoveryRequest,
+    request: Request,  # noqa: ARG001
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> RecoveryRequiredResponse:
+    """Request account recovery when the user has lost TOTP access.
+
+    Called from the TOTP step of login when the user clicks
+    'Lost authenticator?'. Verifies email + password, sends
+    a recovery approval email, and returns a success response.
+    """
+    try:
+        await auth.request_recovery_with_password(body.email, body.password)
+        return RecoveryRequiredResponse(
+            message=(
+                "A recovery email has been sent to your email address. "
+                "Please check your inbox and click the link to approve."
+            ),
+        )
+    except AuthenticationError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
+    except TOTPError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+
+
+@auth_router.post(
+    "/recovery/approve",
+    response_model=SetupRequiredResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+@limiter.limit("5/minute")
+async def recovery_approve(
+    body: RecoveryApproveRequest,
+    request: Request,  # noqa: ARG001
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> SetupRequiredResponse:
+    """Approve account recovery after clicking the email link.
+
+    Called by the SPA when the user clicks the approval link.
+    Validates the recovery approval token, deletes TOTP, deactivates
+    the user, and returns a setup token so the user can enroll a new
+    authenticator and set a new password.
+    """
+    try:
+        setup_token = await auth.approve_recovery(body.token)
+        return SetupRequiredResponse(setup_token=setup_token)
+    except InvalidTokenError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 @auth_router.post(
@@ -291,14 +386,20 @@ async def setup_complete(
     the password is NOT changed and the account remains active — only
     new tokens are issued.
     """
-    user_agent, ip_address = _get_client_info(request)
-    tokens = await auth.complete_setup(
-        user_id=setup_user.id,
-        new_password=body.new_password,
-        current_user_id=setup_user.id,
-        user_agent=user_agent,
-        ip_address=ip_address,
-    )
+    try:
+        user_agent, ip_address = _get_client_info(request)
+        tokens = await auth.complete_setup(
+            user_id=setup_user.id,
+            new_password=body.new_password,
+            current_user_id=setup_user.id,
+            user_agent=user_agent,
+            ip_address=ip_address,
+        )
+    except TOTPNotEnabledError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from None
     return TokenResponse(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,
@@ -470,9 +571,13 @@ async def enable_totp(
     and a setup token (first-time flow, no backup codes).
     """
     try:
-        # Inactive user = setup flow = no backup codes
-        generate_codes = user.is_active
-        result = await auth.enable_totp(user.id, generate_backup_codes=generate_codes)
+        # Active superuser = generate backup codes; setup flow or non-superuser = no codes
+        generate_codes = user.is_superuser and user.is_active
+        result = await auth.enable_totp(
+            user.id,
+            generate_backup_codes=generate_codes,
+            current_user_id=user.id if user.is_active else None,
+        )
         return TOTPEnableResponse(
             secret=result.secret,
             provisioning_uri=result.provisioning_uri,
@@ -498,7 +603,7 @@ async def verify_totp(
     Works with both a regular JWT (active user) and a setup token (first-time flow).
     """
     try:
-        verified = await auth.verify_and_confirm_totp(user.id, body.token)
+        verified = await auth.verify_and_confirm_totp(user.id, body.token, current_user_id=user.id)
         return {"verified": verified}
     except TOTPError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
@@ -518,7 +623,7 @@ async def disable_totp(
 ) -> dict[str, Any]:
     """Disable TOTP two-factor authentication."""
     try:
-        disabled = await auth.disable_totp(user.id, body.token)
+        disabled = await auth.disable_totp(user.id, body.token, current_user_id=user.id)
         return {"disabled": disabled}
     except TOTPError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
@@ -534,8 +639,16 @@ async def generate_backup_codes(
     user: User = Depends(get_setup_or_active_user),  # noqa: B008
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
-    """Generate new backup codes (invalidates old ones)."""
-    codes = await auth.generate_backup_codes(user.id)
+    """Generate new backup codes (invalidates old ones).
+
+    Only available to superusers.
+    """
+    if not user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Backup codes are only available for superusers.",
+        )
+    codes = await auth.generate_backup_codes(user.id, current_user_id=user.id)
     return {"backup_codes": codes}
 
 
@@ -653,11 +766,48 @@ async def admin_reset_user_auth(
             user_id=user_id,
             current_user_id=_user.id,
         )
-        return AdminResetUserAuthResponse(temporary_password=temp_password)
+        await auth.send_temporary_password_email(user_id, temp_password)
+        return AdminResetUserAuthResponse(
+            message="Temporary password sent to user's email."
+        )
     except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         ) from None
+    except CannotModifySuperuserError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+
+
+@auth_router.post(
+    "/admin/users/{user_id}/resend-welcome",
+    response_model=AdminResendWelcomeResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def admin_resend_welcome(
+    user_id: UUID,
+    _user: User = Depends(require_superuser),
+    auth: AuthManager = Depends(get_auth_manager),
+) -> AdminResendWelcomeResponse:
+    """Admin re-send welcome email with new temp password and verification link.
+
+    Requires superuser.
+    Generates a fresh temporary password and verification token, then sends
+    a single combined welcome email. Does NOT delete TOTP or revoke sessions.
+    """
+    try:
+        await auth.resend_welcome(
+            user_id=user_id,
+            current_user_id=_user.id,
+        )
+        return AdminResendWelcomeResponse(
+            message="Welcome email sent to user's email."
+        )
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        ) from None
+    except CannotModifySuperuserError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 @auth_router.get(
@@ -799,6 +949,8 @@ async def admin_update_user(
         ) from None
     except UserAlreadyExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
+    except CannotModifySuperuserError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 @auth_router.delete(
@@ -822,6 +974,10 @@ async def admin_delete_user(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         ) from None
+    except CannotDeleteSelfError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+    except CannotModifySuperuserError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +1064,7 @@ async def revoke_role(
 ) -> dict[str, Any]:
     """Revoke a role from a user. Requires roles:assign permission."""
     try:
-        revoked = await auth.revoke_role(user_id, body.role_name)
+        revoked = await auth.revoke_role(user_id, body.role_name, current_user_id=_user.id)
         if not revoked:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -987,7 +1143,9 @@ async def add_permission_to_role(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
     """Add a permission to a role. Requires superuser."""
-    added = await auth.add_permission_to_role(role_name, body.resource, body.action)
+    added = await auth.add_permission_to_role(
+        role_name, body.resource, body.action, current_user_id=_user.id
+    )
     if not added:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1008,7 +1166,9 @@ async def remove_permission_from_role(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
     """Remove a permission from a role. Requires superuser."""
-    removed = await auth.remove_permission_from_role(role_name, body.resource, body.action)
+    removed = await auth.remove_permission_from_role(
+        role_name, body.resource, body.action, current_user_id=_user.id
+    )
     if not removed:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1020,6 +1180,21 @@ async def remove_permission_from_role(
 # ---------------------------------------------------------------------------
 # Admin: App Membership
 # ---------------------------------------------------------------------------
+
+
+@auth_router.get(
+    "/admin/apps",
+    response_model=list[AppResponse],
+)
+@limiter.limit("30/minute")
+async def admin_list_apps(
+    request: Request,  # noqa: ARG001
+    _user: User = Depends(require_superuser),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+) -> list[AppResponse]:
+    """List all registered apps. Requires superuser."""
+    apps = await auth.get_all_apps()
+    return [AppResponse(slug=a.slug, name=a.name) for a in apps]
 
 
 @auth_router.post(
@@ -1055,7 +1230,9 @@ async def unregister_user_from_app(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> dict[str, Any]:
     """Unregister a user from an app. Requires superuser."""
-    unregistered = await auth.unregister_user_from_app(body.user_id, body.app_slug)
+    unregistered = await auth.unregister_user_from_app(
+        body.user_id, body.app_slug, current_user_id=_user.id
+    )
     if not unregistered:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1074,5 +1251,5 @@ async def get_user_apps(
     auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
 ) -> UserAppListResponse:
     """Get all registered apps for a user. Requires superuser."""
-    app_slugs = await auth.get_user_apps(user_id)
-    return UserAppListResponse(app_slugs=app_slugs)
+    apps = await auth.get_user_apps(user_id)
+    return UserAppListResponse(app_slugs=[a.slug for a in apps])

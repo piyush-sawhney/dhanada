@@ -96,7 +96,7 @@ class ClientService:
         if name is not None:
             updates["name"] = name
         if updates:
-            updated = await self._repo.update(client_id, **updates)
+            updated = await self._repo.update(client_id, **updates, updated_by_id=user_id)
             return updated
         return client
 
@@ -111,6 +111,7 @@ class ClientService:
             is_active=False,
             deleted_at=datetime.now(UTC),
             deleted_by_id=user_id,
+            updated_by_id=user_id,
         )
         return True
 
@@ -126,6 +127,7 @@ class ClientService:
             is_active=True,
             deleted_at=None,
             deleted_by_id=None,
+            updated_by_id=user_id,
         )
 
     async def hard_delete(self, user_id: UUID, client_id: UUID) -> bool:
@@ -169,6 +171,7 @@ class ClientService:
             encrypted_nonce=encrypted.nonce,
             encrypted_dek=encrypted.encrypted_dek,
             pan_encryption_key_id=encrypted.key_id,
+            updated_by_id=user_id,
         )
 
     async def get_with_pan(self, user_id: UUID, client_id: UUID) -> tuple[Client, str]:
@@ -465,6 +468,7 @@ class DocumentService:
             updates["expiry_date"] = expiry_date
 
         if updates:
+            updates["updated_by_id"] = user_id
             result = await self._session.execute(
                 update(Document)
                 .where(Document.id == document_id)
@@ -488,6 +492,7 @@ class DocumentService:
                 is_active=False,
                 deleted_at=datetime.now(UTC),
                 deleted_by_id=user_id,
+                updated_by_id=user_id,
             )
         )
         await self._session.flush()
@@ -504,7 +509,7 @@ class DocumentService:
         result = await self._session.execute(
             update(Document)
             .where(Document.id == document_id)
-            .values(is_active=True, deleted_at=None, deleted_by_id=None)
+            .values(is_active=True, deleted_at=None, deleted_by_id=None, updated_by_id=user_id)
             .returning(Document)
         )
         await self._session.flush()

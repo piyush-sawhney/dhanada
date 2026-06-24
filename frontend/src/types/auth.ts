@@ -27,6 +27,10 @@ export interface BootstrapStatusResponse {
   needs_bootstrap: boolean
 }
 
+export interface TOTPRequiredResponse {
+  status: "totp_required"
+}
+
 export interface BootstrapCompleteResponse extends TokenResponse {
   user: UserResponse
   totp_required: boolean
@@ -59,9 +63,19 @@ export interface UserResponse {
   updated_at: string
 }
 
-export interface ErrorResponse {
-  detail: string
-  hint?: string | null
+export interface AppResponse {
+  slug: string
+  name: string
 }
 
-export type LoginResponse = TokenResponse | SetupRequiredResponse
+export interface RecoveryRequiredResponse {
+  status: "recovery_email_sent"
+  message: string
+  expires_in: number
+}
+
+export interface ErrorResponse {
+  detail: string
+}
+
+export type LoginResponse = TokenResponse | SetupRequiredResponse | TOTPRequiredResponse | RecoveryRequiredResponse

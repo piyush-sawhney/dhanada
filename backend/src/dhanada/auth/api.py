@@ -21,10 +21,15 @@ from dhanada.auth.db.repository import (
 from dhanada.auth.db.session import DatabaseSession
 from dhanada.auth.email.sender import EmailSender
 from dhanada.auth.exceptions import (
+    AuthenticationError,
+    CannotModifySuperuserError,
     SuperuserAlreadyExistsError,
+    TOTPError,
     TOTPInvalidTokenError,
     TOTPNotEnabledError,
+    UserNotFoundError,
 )
+from dhanada.auth.models.app import App
 from dhanada.auth.models.role import Role
 from dhanada.auth.models.user import User
 from dhanada.auth.services.audit_service import AuditService
@@ -32,6 +37,7 @@ from dhanada.auth.services.password_reset_service import (
     PasswordResetResult,
     PasswordResetService,
 )
+from dhanada.auth.services.recovery_service import RecoveryService
 from dhanada.auth.services.role_service import PermissionCheck, RoleService
 from dhanada.auth.services.token_service import TokenResult, TokenService
 from dhanada.auth.services.totp_service import TOTPEnrollmentResult, TOTPService
@@ -116,7 +122,7 @@ class AuthManager:
                 await user_repo.update(
                     user.id,
                     is_active=False,
-                    expires_at=datetime.now(UTC) + timedelta(hours=24),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=10),
                     updated_by_id=current_user_id,
                 )
             AuditService.user_created(
@@ -173,6 +179,14 @@ class AuthManager:
                 expires_at=datetime.now(UTC) + timedelta(hours=24),
                 updated_by_id=user.id,
             )
+            # Auto-register superuser to all apps
+            app_repo = AppRepository(session)
+            apps = await app_repo.list_all()
+            for app in apps:
+                await app_repo.assign_user(
+                    user.id, app.id, assigned_by_id=user.id, created_by_id=user.id
+                )
+
             AuditService.bootstrap_complete(
                 user_id=str(user.id),
                 ip_address=ip_address,
@@ -313,37 +327,56 @@ class AuthManager:
         self,
         user_id: uuid.UUID,
         generate_backup_codes: bool = True,
+        current_user_id: uuid.UUID | None = None,
     ) -> TOTPEnrollmentResult:
         """Enable TOTP for a user."""
         async with self._db.session() as session:
             totp_repo = TOTPRepository(session)
             user_repo = UserRepository(session)
             service = TOTPService(totp_repo, user_repo, self._totp_manager)
-            return await service.enable(user_id, generate_backup_codes=generate_backup_codes)
+            result = await service.enable(user_id, generate_backup_codes=generate_backup_codes)
+            if current_user_id is not None:
+                await user_repo.update(user_id, updated_by_id=current_user_id)
+            return result
 
-    async def verify_and_confirm_totp(self, user_id: uuid.UUID, token: str) -> bool:
+    async def verify_and_confirm_totp(
+        self, user_id: uuid.UUID, token: str, current_user_id: uuid.UUID | None = None
+    ) -> bool:
         """Verify and confirm TOTP enrollment."""
         async with self._db.session() as session:
             totp_repo = TOTPRepository(session)
             user_repo = UserRepository(session)
             service = TOTPService(totp_repo, user_repo, self._totp_manager)
-            return await service.verify_and_confirm(user_id, token)
+            result = await service.verify_and_confirm(user_id, token)
+            if result and current_user_id is not None:
+                await user_repo.update(user_id, updated_by_id=current_user_id)
+            return result
 
-    async def disable_totp(self, user_id: uuid.UUID, token: str) -> bool:
+    async def disable_totp(
+        self, user_id: uuid.UUID, token: str, current_user_id: uuid.UUID | None = None
+    ) -> bool:
         """Disable TOTP for a user."""
         async with self._db.session() as session:
             totp_repo = TOTPRepository(session)
             user_repo = UserRepository(session)
             service = TOTPService(totp_repo, user_repo, self._totp_manager)
-            return await service.disable(user_id, token)
+            result = await service.disable(user_id, token)
+            if result and current_user_id is not None:
+                await user_repo.update(user_id, updated_by_id=current_user_id)
+            return result
 
-    async def generate_backup_codes(self, user_id: uuid.UUID) -> list[str]:
+    async def generate_backup_codes(
+        self, user_id: uuid.UUID, current_user_id: uuid.UUID | None = None
+    ) -> list[str]:
         """Generate new backup codes."""
         async with self._db.session() as session:
             totp_repo = TOTPRepository(session)
             user_repo = UserRepository(session)
             service = TOTPService(totp_repo, user_repo, self._totp_manager)
-            return await service.generate_backup_codes(user_id)
+            result = await service.generate_backup_codes(user_id)
+            if current_user_id is not None:
+                await user_repo.update(user_id, updated_by_id=current_user_id)
+            return result
 
     async def assign_role(
         self,
@@ -370,13 +403,26 @@ class AuthManager:
             )
             return result
 
-    async def revoke_role(self, user_id: uuid.UUID, role_name: str) -> bool:
+    async def revoke_role(
+        self,
+        user_id: uuid.UUID,
+        role_name: str,
+        current_user_id: uuid.UUID | None = None,
+        ip_address: str | None = None,
+    ) -> bool:
         """Revoke a role from a user."""
         async with self._db.session() as session:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
             service = RoleService(role_repo, user_repo)
-            return await service.revoke_role(user_id, role_name)
+            result = await service.revoke_role(user_id, role_name)
+            AuditService.role_revoked(
+                user_id=str(user_id),
+                role_name=role_name,
+                actor_id=str(current_user_id) if current_user_id else None,
+                ip_address=ip_address,
+            )
+            return result
 
     async def check_permission(
         self, user_id: uuid.UUID, resource: str, action: str
@@ -556,19 +602,23 @@ class AuthManager:
         role_name: str,
         resource: str,
         action: str,
+        current_user_id: uuid.UUID | None = None,
     ) -> bool:
         """Add a permission to a role."""
         async with self._db.session() as session:
             role_repo = RoleRepository(session)
             user_repo = UserRepository(session)
             service = RoleService(role_repo, user_repo)
-            return await service.add_permission(role_name, resource, action)
+            return await service.add_permission(
+                role_name, resource, action, created_by_id=current_user_id
+            )
 
     async def remove_permission_from_role(
         self,
         role_name: str,
         resource: str,
         action: str,
+        _current_user_id: uuid.UUID | None = None,
     ) -> bool:
         """Remove a permission from a role."""
         async with self._db.session() as session:
@@ -596,26 +646,34 @@ class AuthManager:
 
     async def _create_tokens(
         self,
-        user: User,
+        user_id: uuid.UUID,
         user_agent: str | None = None,
         ip_address: str | None = None,
     ) -> TokenResult:
-        """Create access and refresh tokens for a user."""
+        """Create access and refresh tokens for a user.
+
+        Reloads the user within the session to ensure all relationships
+        (roles, permissions) are accessible without detached-instance errors.
+        """
         async with self._db.session() as session:
             token_repo = RefreshTokenRepository(session)
             user_repo = UserRepository(session)
             token_service = TokenService(token_repo, user_repo, self._jwt)
 
-            await user_repo.update_last_login(user.id)
+            fresh_user = await user_repo.get(user_id)
+            if fresh_user is None:
+                raise UserNotFoundError(f"User {user_id} not found")
 
-            roles = [role.name for role in user.roles]
+            await user_repo.update_last_login(user_id)
+
+            roles = [role.name for role in fresh_user.roles]
             permissions: list[str] = []
-            for role in user.roles:
+            for role in fresh_user.roles:
                 for perm in role.permissions:
                     permissions.append(f"{perm.resource}:{perm.action}")
 
             return await token_service.create_tokens(
-                user_id=user.id,
+                user_id=user_id,
                 roles=roles,
                 permissions=permissions,
                 user_agent=user_agent,
@@ -720,13 +778,64 @@ class AuthManager:
     ) -> str:
         """Admin force-reset: disable TOTP, deactivate, set temp password.
 
+        Cannot reset authentication for a superuser.
         Returns the temporary password string.
         """
         temp_password = self.generate_temp_password()
 
         async with self._db.session() as session:
             user_repo = UserRepository(session)
+
+            target_user = await user_repo.get(user_id)
+            if target_user is not None and target_user.is_superuser:
+                raise CannotModifySuperuserError(
+                    "Cannot reset authentication for a superuser"
+                )
             totp_repo = TOTPRepository(session)
+
+            user_service = self._create_user_service(user_repo)
+            await user_service.set_password(
+                user_id,
+                temp_password,
+                updated_by_id=current_user_id,
+            )
+            await user_repo.update(
+                    user_id,
+                    is_active=False,
+                    expires_at=datetime.now(UTC) + timedelta(minutes=10),
+                    updated_by_id=current_user_id,
+                )
+            await totp_repo.delete_by_user_id(user_id)
+
+        AuditService.account_reset(
+            user_id=str(user_id),
+            actor_id=str(current_user_id),
+            ip_address=ip_address,
+        )
+        await self.revoke_all_sessions(user_id)
+        return temp_password
+
+    async def resend_welcome(
+        self,
+        user_id: uuid.UUID,
+        current_user_id: uuid.UUID,
+    ) -> str:
+        """Re-send welcome email with fresh temp password and verification link.
+
+        Lighter than reset_user_auth: does NOT delete TOTP or revoke sessions.
+        Only updates the password hash and expiry, then sends a new welcome email.
+        """
+        temp_password = self.generate_temp_password()
+
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            target_user = await user_repo.get(user_id)
+            if target_user is None:
+                raise UserNotFoundError(f"User {user_id} not found")
+            if target_user.is_superuser:
+                raise CannotModifySuperuserError(
+                    "Cannot resend welcome email for a superuser"
+                )
 
             user_service = self._create_user_service(user_repo)
             await user_service.set_password(
@@ -737,17 +846,11 @@ class AuthManager:
             await user_repo.update(
                 user_id,
                 is_active=False,
-                expires_at=datetime.now(UTC) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
                 updated_by_id=current_user_id,
             )
-            await totp_repo.delete_by_user_id(user_id)
 
-        AuditService.account_reset(
-            user_id=str(user_id),
-            actor_id=str(current_user_id),
-            ip_address=ip_address,
-        )
-        await self.revoke_all_sessions(user_id)
+        await self.send_welcome_email(user_id, temp_password)
         return temp_password
 
     @staticmethod
@@ -760,6 +863,103 @@ class AuthManager:
         async with self._db.session() as session:
             user_repo = UserRepository(session)
             return await user_repo.count() > 0
+
+    async def request_recovery(
+        self,
+        user: User,
+    ) -> bool:
+        """Send a recovery approval email when a backup code is used.
+
+        Args:
+            user: The user who entered a backup code.
+
+        Returns:
+            True if the email was sent.
+        """
+        if not user.is_superuser:
+            return False
+        if not user.email_verified:
+            return False
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            totp_repo = TOTPRepository(session)
+            service = RecoveryService(
+                jwt_manager=self._jwt,
+                user_repo=user_repo,
+                totp_repo=totp_repo,
+                email_sender=self._email_sender,
+                base_url=self._config.base_url,
+            )
+            return await service.request_recovery(user)
+
+    async def request_recovery_with_password(
+        self,
+        email: str,
+        password: str,
+    ) -> bool:
+        """Send a recovery approval email when the user has lost TOTP access.
+
+        Verifies credentials first, then sends the recovery email.
+        Used by the 'Lost authenticator?' flow on the TOTP step.
+
+        Args:
+            email: User's email.
+            password: User's password.
+
+        Returns:
+            True if the email was sent.
+
+        Raises:
+            AuthenticationError: Invalid credentials.
+            TOTPError: TOTP is not enabled.
+        """
+        user = await self.verify_credentials(email, password)
+        if not user.is_superuser:
+            raise AuthenticationError(
+                "Only superusers can self-recover. Contact a superuser to"
+                " reset your authentication.",
+            )
+        if not user.email_verified:
+            raise AuthenticationError(
+                "Email is not verified. Please verify your email address first."
+            )
+        if not user.is_active:
+            raise AuthenticationError(
+                "Account is not active",
+                hint="Contact an administrator to reactivate your account.",
+            )
+        if not await self.totp_is_enabled(user.id):
+            raise TOTPError(
+                "TOTP is not enabled for this account",
+                hint="You can log in without two-factor authentication.",
+            )
+        return await self.request_recovery(user)
+
+    async def approve_recovery(self, token: str) -> str:
+        """Approve recovery after email link click.
+
+        Deletes TOTP, deactivates user, and returns a setup token.
+
+        Args:
+            token: Recovery approval JWT from the email link.
+
+        Returns:
+            A setup token string.
+
+        Raises:
+            InvalidTokenError: Token is invalid or expired.
+        """
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            totp_repo = TOTPRepository(session)
+            service = RecoveryService(
+                jwt_manager=self._jwt,
+                user_repo=user_repo,
+                totp_repo=totp_repo,
+                email_sender=self._email_sender,
+                base_url=self._config.base_url,
+            )
+            return await service.approve_recovery(token)
 
     async def request_password_reset(self, email: str) -> bool:
         """Request a password reset email. Always returns True (prevents enumeration)."""
@@ -833,6 +1033,41 @@ class AuthManager:
             )
             return await service.send_verification(user_id)
 
+    async def send_temporary_password_email(
+        self, user_id: uuid.UUID, temporary_password: str
+    ) -> bool:
+        """Send a temporary password to a user via email."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            user = await user_repo.get(user_id)
+            if user is None or self._email_sender is None:
+                return False
+            return await self._email_sender.send_temporary_password_email(
+                to=user.email,
+                full_name=user.full_name,
+                temporary_password=temporary_password,
+            )
+
+    async def send_welcome_email(
+        self, user_id: uuid.UUID, temporary_password: str
+    ) -> bool:
+        """Send a combined welcome email with temp password and verification link."""
+        async with self._db.session() as session:
+            user_repo = UserRepository(session)
+            user = await user_repo.get(user_id)
+            if user is None or self._email_sender is None:
+                return False
+            token = self._jwt.create_verification_token(
+                user_id, self._verification_token_ttl
+            )
+            verification_url = f"{self._config.base_url}/verify-email?token={token}"
+            return await self._email_sender.send_welcome_email(
+                to=user.email,
+                full_name=user.full_name,
+                temporary_password=temporary_password,
+                verification_url=verification_url,
+            )
+
     async def register_user_to_app(
         self,
         user_id: uuid.UUID,
@@ -846,10 +1081,14 @@ class AuthManager:
             app = await app_repo.get_by_slug(app_slug)
             if app is None:
                 return False
-            await app_repo.assign_user(user_id, app.id, assigned_by_id=assigned_by_id)
+            await app_repo.assign_user(
+                user_id, app.id, assigned_by_id=assigned_by_id, created_by_id=assigned_by_id
+            )
             return True
 
-    async def unregister_user_from_app(self, user_id: uuid.UUID, app_slug: str) -> bool:
+    async def unregister_user_from_app(
+        self, user_id: uuid.UUID, app_slug: str, _current_user_id: uuid.UUID | None = None
+    ) -> bool:
         """Unregister a user from an app."""
         async with self._db.session() as session:
             app_repo = AppRepository(session)
@@ -858,12 +1097,16 @@ class AuthManager:
                 return False
             return await app_repo.remove_user(user_id, app.id)
 
-    async def get_user_apps(self, user_id: uuid.UUID) -> list[str]:
-        """Get all app slugs a user is registered to."""
+    async def get_user_apps(self, user_id: uuid.UUID) -> list[App]:
+        """Get all apps a user is registered to."""
         async with self._db.session() as session:
             app_repo = AppRepository(session)
-            apps = await app_repo.get_user_apps(user_id)
-            return [app.slug for app in apps]
+            return await app_repo.get_user_apps(user_id)
+
+    async def get_all_apps(self) -> list[App]:
+        """Get all registered apps."""
+        async with self._db.session() as session:
+            return await AppRepository(session).list_all()
 
     async def close(self) -> None:
         """Close database connections."""

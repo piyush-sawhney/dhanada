@@ -6,13 +6,6 @@ from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field
 
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_]+$")
-    password: str = Field(..., min_length=8, max_length=128)
-    full_name: str | None = Field(None, max_length=200)
-
-
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -93,7 +86,6 @@ class BootstrapStatusResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
-    hint: str | None = None
 
 
 class AdminCreateUserRequest(BaseModel):
@@ -110,21 +102,11 @@ class UserCreatedResponse(BaseModel):
     full_name: str | None
     is_active: bool = False
     is_superuser: bool = False
-    temporary_password: str
     roles: list[str] = []
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class BootstrapCompleteResponse(BaseModel):
-    user: UserResponse
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"  # noqa: S105
-    expires_in: int = 900
-    totp_required: bool = True
 
 
 class SetupRequiredResponse(BaseModel):
@@ -133,24 +115,39 @@ class SetupRequiredResponse(BaseModel):
     expires_in: int = 900
 
 
+class TOTPRequiredResponse(BaseModel):
+    status: str = "totp_required"
+
+
 class SetupCompleteRequest(BaseModel):
     new_password: str | None = Field(None, min_length=8, max_length=128)
 
 
-class AdminResetUserAuthResponse(BaseModel):
-    temporary_password: str
+class RecoveryRequiredResponse(BaseModel):
+    status: str = "recovery_email_sent"
+    message: str
+    expires_in: int = 900
 
 
-class VerifyEmailRequest(BaseModel):
+class RecoveryRequest(BaseModel):
+    email: str = Field(max_length=255)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class RecoveryApproveRequest(BaseModel):
     token: str
+
+
+class AdminResetUserAuthResponse(BaseModel):
+    message: str
+
+
+class AdminResendWelcomeResponse(BaseModel):
+    message: str
 
 
 class VerifyEmailResponse(BaseModel):
     verified: bool
-    email: str | None = None
-
-
-class SendVerificationRequest(BaseModel):
     email: str | None = None
 
 
@@ -252,6 +249,11 @@ class RegisterUserAppRequest(BaseModel):
 class UnregisterUserAppRequest(BaseModel):
     user_id: UUID
     app_slug: str = Field(..., min_length=1, max_length=50)
+
+
+class AppResponse(BaseModel):
+    slug: str
+    name: str
 
 
 class UserAppListResponse(BaseModel):

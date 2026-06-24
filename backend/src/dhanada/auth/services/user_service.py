@@ -1,13 +1,15 @@
 """User management service."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dhanada.auth.auth.passwords import PasswordManager
 from dhanada.auth.db.repository import UserRepository
 from dhanada.auth.exceptions import (
     AccountLockedError,
+    CannotDeleteSelfError,
+    CannotModifySuperuserError,
     InvalidCredentialsError,
     UserAlreadyExistsError,
     UserNotFoundError,
@@ -138,8 +140,8 @@ class UserService:
         # Check account lockout
         if user.locked_until is not None and user.locked_until > datetime.now(UTC):
             raise AccountLockedError(
-                "Account is temporarily locked due to too many failed login attempts",
-                hint=f"Try again after {user.locked_until.strftime('%H:%M UTC')}",
+                "Account locked.",
+                locked_until=user.locked_until.isoformat(),
             )
 
         if not self._password_manager.verify_password(password, user.password_hash):
@@ -149,9 +151,11 @@ class UserService:
                 raise RuntimeError("Failed to retrieve user after incrementing failed attempts")
             if user.failed_login_attempts >= self._lockout_threshold:
                 await self._user_repo.lock_account(user.id, self._lockout_minutes)
+                now = datetime.now(UTC)
+                locked_until = now + timedelta(minutes=self._lockout_minutes)
                 raise AccountLockedError(
-                    "Account locked due to too many failed login attempts",
-                    hint=f"Try again in {self._lockout_minutes} minutes",
+                    "Account locked.",
+                    locked_until=locked_until.isoformat(),
                 )
             raise InvalidCredentialsError(
                 "Invalid email or password",
@@ -295,7 +299,12 @@ class UserService:
         is_active: bool | None = None,
         updated_by_id: uuid.UUID | None = None,
     ) -> User:
-        """Admin update any user's profile."""
+        """Admin update any user's profile. Cannot deactivate a superuser."""
+        if is_active is not None and not is_active:
+            target = await self._user_repo.get(user_id)
+            if target is not None and target.is_superuser:
+                raise CannotModifySuperuserError("Cannot deactivate a superuser")
+
         updates: dict[str, Any] = {}
         if email is not None:
             existing = await self._user_repo.get_by_email(email)
@@ -321,9 +330,15 @@ class UserService:
         user_id: uuid.UUID,
         deleted_by_id: uuid.UUID | None = None,
     ) -> bool:
-        """Soft-delete a user."""
-        await self.get_by_id(user_id)
-        return await self._user_repo.delete(user_id, deleted_by_id=deleted_by_id)
+        """Soft-delete a user. Cannot delete yourself or a superuser."""
+        if deleted_by_id is not None and deleted_by_id == user_id:
+            raise CannotDeleteSelfError("You cannot delete your own account")
+        user = await self.get_by_id(user_id)
+        if user.is_superuser:
+            raise CannotModifySuperuserError("Cannot delete a superuser")
+        return await self._user_repo.delete(
+            user_id, deleted_by_id=deleted_by_id, updated_by_id=deleted_by_id
+        )
 
     async def cleanup_expired_users(self) -> int:
         """Hard-delete inactive users whose account expiry has passed."""

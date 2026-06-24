@@ -42,10 +42,79 @@ const router = createRouter({
       meta: { layout: AuthLayout, guest: true },
     },
     {
+      path: "/recovery/email-sent",
+      name: "recovery-email-sent",
+      component: () => import("../views/RecoveryEmailSentView.vue"),
+      meta: { layout: AuthLayout, guest: true },
+    },
+    {
+      path: "/recovery/approve",
+      name: "recovery-approve",
+      component: () => import("../views/RecoveryApprovalView.vue"),
+      meta: { layout: AuthLayout, guest: true },
+    },
+    {
+      path: "/verify-email",
+      name: "verify-email",
+      component: () => import("../views/VerifyEmailView.vue"),
+      meta: { layout: AuthLayout, guest: true },
+    },
+    {
       path: "/dashboard",
       name: "dashboard",
       component: () => import("../views/DashboardView.vue"),
       meta: { layout: AppLayout, requiresAuth: true },
+    },
+    {
+      path: "/crm",
+      redirect: "/crm/clients",
+    },
+    {
+      path: "/crm/clients",
+      name: "crm-clients",
+      component: () => import("../views/crm/ClientsView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true },
+    },
+    {
+      path: "/admin",
+      redirect: "/admin/users",
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
+    },
+    {
+      path: "/admin/users",
+      name: "admin-users",
+      component: () => import("../views/admin/UsersListView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
+    },
+    {
+      path: "/admin/users/new",
+      name: "admin-users-new",
+      component: () => import("../views/admin/UserCreateView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
+    },
+    {
+      path: "/admin/users/:id",
+      name: "admin-users-id",
+      component: () => import("../views/admin/UserDetailView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
+    },
+    {
+      path: "/admin/roles",
+      name: "admin-roles",
+      component: () => import("../views/admin/RolesListView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
+    },
+    {
+      path: "/admin/roles/new",
+      name: "admin-roles-new",
+      component: () => import("../views/admin/RoleCreateView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
+    },
+    {
+      path: "/admin/roles/:name",
+      name: "admin-roles-name",
+      component: () => import("../views/admin/RoleDetailView.vue"),
+      meta: { layout: AppLayout, requiresAuth: true, requiresSuperuser: true },
     },
   ],
 })
@@ -57,6 +126,27 @@ router.beforeEach(async (to, _from) => {
     return true
   }
 
+  // Global bootstrap check — redirect any route to /bootstrap if no users exist
+  if (!store.isAuthenticated && !store.bootstrapChecked) {
+    try {
+      const { needs_bootstrap } = await checkBootstrapStatus()
+      if (needs_bootstrap) {
+        return { name: "bootstrap" }
+      }
+    } catch {
+    }
+    store.bootstrapChecked = true
+  }
+
+  // Guest routes (login, forgot-password, reset-password, recovery)
+  if (to.name === "login" || to.name === "forgot-password" || to.name === "reset-password" || to.name === "recovery-email-sent" || to.name === "recovery-approve" || to.name === "verify-email") {
+    if (store.isAuthenticated) {
+      return { name: "dashboard" }
+    }
+    return true
+  }
+
+  // Setup route
   if (to.name === "setup") {
     if (store.isSetupRequired) {
       return true
@@ -67,30 +157,17 @@ router.beforeEach(async (to, _from) => {
     return { name: "login" }
   }
 
-  if (to.name === "login" || to.name === "forgot-password" || to.name === "reset-password") {
-    if (store.isAuthenticated) {
-      return { name: "dashboard" }
-    }
-
-    if (to.name === "login") {
-      try {
-        const { needs_bootstrap } = await checkBootstrapStatus()
-        if (needs_bootstrap) {
-          return { name: "bootstrap" }
-        }
-      } catch {
-      }
-    }
-
-    return true
-  }
-
+  // Protected routes
   if (to.meta.requiresAuth) {
     if (!store.isAuthenticated) {
       return { name: "login" }
     }
-    if (!store.user) {
-      await store.checkAuth()
+    await store.checkAuth()
+    if (!store.isAuthenticated) {
+      return { name: "login" }
+    }
+    if (to.meta.requiresSuperuser && !store.user?.is_superuser) {
+      return { name: "dashboard" }
     }
     return true
   }
