@@ -19,6 +19,8 @@ const error = shallowRef("")
 const loading = shallowRef(false)
 const codesDownloaded = shallowRef(false)
 
+const isRecovery = store.recoveryMode
+
 onMounted(async () => {
   if (!store.setupToken) {
     router.push({ name: "login" })
@@ -119,8 +121,14 @@ async function completeSetup() {
     </template>
 
     <template v-else-if="step === 'backup-codes'">
-      <p class="text-sm text-gray-500">
-        Save these backup codes in a secure place. You can use them to log in if you lose access to your authenticator app.
+      <div v-if="isRecovery" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+        Your old backup codes have been invalidated. These are your new backup codes —
+        save them before continuing. You'll need them if you ever lose access to your
+        authenticator app again.
+      </div>
+      <p v-else class="text-sm text-gray-500">
+        Save these backup codes in a secure place. You'll need them if you ever lose
+        access to your authenticator app.
       </p>
       <div class="rounded-lg border bg-gray-50 p-4 font-mono text-sm">
         <div v-for="(code, i) in backupCodes" :key="i" class="py-1">
@@ -135,7 +143,7 @@ async function completeSetup() {
       </button>
       <button
         class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        :disabled="loading"
+        :disabled="loading || !codesDownloaded"
         @click="completeSetup"
       >
         {{ loading ? "Finishing setup..." : "I've saved my backup codes" }}

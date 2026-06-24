@@ -4,7 +4,6 @@ import type {
   BootstrapStatusResponse,
   LoginRequest,
   LoginResponse,
-  RecoveryRequiredResponse,
   SetupCompleteRequest,
   TokenResponse,
   TOTPEnableResponse,
@@ -25,6 +24,25 @@ export async function bootstrap(body: BootstrapRequest): Promise<LoginResponse> 
 
 export async function login(body: LoginRequest): Promise<LoginResponse> {
   const { data } = await api.post("/api/auth/login", body)
+  return data
+}
+
+export async function loginTotp(sessionToken: string, totpCode: string): Promise<TokenResponse> {
+  const { data } = await api.post("/api/auth/login/totp", {
+    session_token: sessionToken,
+    totp_code: totpCode,
+  })
+  return data
+}
+
+export async function recoverWithBackupCode(
+  sessionToken: string,
+  backupCode: string,
+): Promise<{ setup_token: string; recovery: boolean }> {
+  const { data } = await api.post("/api/auth/recovery/backup-code", {
+    session_token: sessionToken,
+    backup_code: backupCode,
+  })
   return data
 }
 
@@ -84,14 +102,4 @@ export async function forgotPassword(email: string): Promise<void> {
 
 export async function resetPassword(token: string, newPassword: string): Promise<void> {
   await api.post("/api/auth/reset-password", { token, new_password: newPassword })
-}
-
-export async function approveRecovery(token: string): Promise<{ setup_token: string }> {
-  const { data } = await api.post("/api/auth/recovery/approve", { token })
-  return data
-}
-
-export async function recoveryRequest(email: string, password: string): Promise<RecoveryRequiredResponse> {
-  const { data } = await api.post("/api/auth/recovery/request", { email, password })
-  return data
 }

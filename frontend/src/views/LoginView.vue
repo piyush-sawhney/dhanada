@@ -2,24 +2,23 @@
 import { shallowRef } from "vue"
 import { useRouter } from "vue-router"
 import { useAuthStore } from "../stores/auth"
-import { recoveryRequest } from "../api/auth"
 import TOTPInput from "../components/TOTPInput.vue"
 
 const router = useRouter()
 const store = useAuthStore()
 
-const step = shallowRef<"credentials" | "totp">("credentials")
+type Step = "credentials" | "totp" | "recovery"
+
+const step = shallowRef<Step>("credentials")
 const email = shallowRef("")
 const password = shallowRef("")
 const totpToken = shallowRef("")
+const backupCode = shallowRef("")
 const error = shallowRef("")
 const loading = shallowRef(false)
-const requestingRecovery = shallowRef(false)
-const recoveryError = shallowRef("")
 
 async function submitCredentials() {
   error.value = ""
-  recoveryError.value = ""
   loading.value = true
 
   try {
@@ -27,10 +26,8 @@ async function submitCredentials() {
 
     if (result.type === "setup_required") {
       router.push({ name: "setup" })
-    } else if (result.type === "totp_required") {
+    } else if (result.type === "session_issued") {
       step.value = "totp"
-    } else if (result.type === "success") {
-      router.push({ name: "dashboard" })
     } else {
       error.value = "Invalid email or password."
     }
@@ -58,23 +55,11 @@ async function submitCredentials() {
 
 async function submitTOTP() {
   error.value = ""
-  recoveryError.value = ""
   loading.value = true
 
   try {
-    const result = await store.login(email.value, password.value, totpToken.value)
-
-    if (result.type === "recovery_email_sent") {
-      router.push({ name: "recovery-email-sent" })
-      return
-    }
-
-    if (result.type === "success") {
-      router.push({ name: "dashboard" })
-    } else {
-      error.value = "Invalid code. Try again."
-      totpToken.value = ""
-    }
+    await store.loginTotp(totpToken.value)
+    router.push({ name: "dashboard" })
   } catch (err: any) {
     error.value = err.response?.data?.detail ?? "Invalid code. Try again."
     totpToken.value = ""
@@ -83,39 +68,66 @@ async function submitTOTP() {
   }
 }
 
-async function requestRecovery() {
-  recoveryError.value = ""
+async function submitBackupCode() {
   error.value = ""
-  requestingRecovery.value = true
+  loading.value = true
 
   try {
-    await recoveryRequest(email.value, password.value)
-    router.push({ name: "recovery-email-sent" })
+    await store.recoverWithBackupCode(backupCode.value)
+    router.push({ name: "setup" })
   } catch (err: any) {
-    recoveryError.value = err.response?.data?.detail ?? "Could not send recovery email."
+    error.value = err.response?.data?.detail ?? "Invalid backup code. Try again."
+    backupCode.value = ""
   } finally {
-    requestingRecovery.value = false
+    loading.value = false
   }
+}
+
+function showRecovery() {
+  step.value = "recovery"
+  error.value = ""
+  backupCode.value = ""
+}
+
+function backToTotp() {
+  step.value = "totp"
+  error.value = ""
+  backupCode.value = ""
 }
 
 function backToCredentials() {
   step.value = "credentials"
   error.value = ""
-  recoveryError.value = ""
+  store.clearSession()
 }
 </script>
 
 <template>
-  <form @submit.prevent="step === 'credentials' ? submitCredentials() : submitTOTP()" class="space-y-5">
+  <form
+    @submit.prevent="
+      step === 'credentials'
+        ? submitCredentials()
+        : step === 'totp'
+          ? submitTOTP()
+          : submitBackupCode()
+    "
+    class="space-y-5"
+  >
     <h2 class="text-xl font-semibold text-gray-900">
-      {{ step === "credentials" ? "Sign in" : "Two-factor authentication" }}
+      <template v-if="step === 'credentials'">Sign in</template>
+      <template v-else-if="step === 'totp'">Two-factor authentication</template>
+      <template v-else>Recovery</template>
     </h2>
+
     <p class="text-sm text-gray-500">
-      {{ step === "credentials" ? "Enter your credentials" : "Enter the code from your authenticator app" }}
+      <template v-if="step === 'credentials'">Enter your credentials</template>
+      <template v-else-if="step === 'totp'">Enter the code from your authenticator app</template>
+      <template v-else>Enter one of your backup recovery codes</template>
     </p>
 
     <div v-if="error" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">{{ error }}</div>
 
+    <!-- Step 1: Credentials -->
     <template v-if="step === 'credentials'">
       <div>
         <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
@@ -156,14 +168,13 @@ function backToCredentials() {
       </div>
     </template>
 
-    <template v-else>
+    <!-- Step 2: TOTP Code -->
+    <template v-else-if="step === 'totp'">
       <TOTPInput v-model="totpToken" />
-
-      <div v-if="recoveryError" class="rounded-lg bg-red-50 p-3 text-sm text-red-700">{{ recoveryError }}</div>
 
       <button
         type="submit"
-        :disabled="loading || totpToken.length < 6"
+        :disabled="loading || totpToken.length !== 6"
         class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {{ loading ? "Verifying..." : "Verify" }}
@@ -172,11 +183,10 @@ function backToCredentials() {
       <div class="text-center">
         <button
           type="button"
-          :disabled="requestingRecovery"
-          class="text-sm text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-          @click="requestRecovery"
+          class="text-sm text-gray-500 hover:text-gray-700"
+          @click="showRecovery"
         >
-          {{ requestingRecovery ? "Sending..." : "Lost your authenticator?" }}
+          Lost your authenticator?
         </button>
       </div>
 
@@ -186,6 +196,40 @@ function backToCredentials() {
         @click="backToCredentials"
       >
         Back to login
+      </button>
+    </template>
+
+    <!-- Step 3: Backup Code Recovery -->
+    <template v-else>
+      <div>
+        <label for="backup-code" class="block text-sm font-medium text-gray-700">
+          Backup recovery code
+        </label>
+        <input
+          id="backup-code"
+          v-model="backupCode"
+          type="text"
+          required
+          autocomplete="off"
+          placeholder="Enter your 16-character backup code"
+          class="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:border-blue-500 focus:ring-2 focus:ring-blue-200 focus:outline-none"
+        />
+      </div>
+
+      <button
+        type="submit"
+        :disabled="loading || backupCode.length !== 16"
+        class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {{ loading ? "Verifying..." : "Recover account" }}
+      </button>
+
+      <button
+        type="button"
+        class="w-full text-sm text-gray-500 hover:text-gray-700"
+        @click="backToTotp"
+      >
+        Back to authenticator code
       </button>
     </template>
   </form>

@@ -357,28 +357,25 @@ class JWTManager:
             ver=payload.get("ver", 0),
         )
 
-    def create_recovery_approval_token(
-        self, user_id: uuid.UUID, ttl_minutes: int = 15
-    ) -> str:
-        """Create a recovery approval token.
+    def create_pre_auth_token(self, user_id: uuid.UUID) -> str:
+        """Create a short-lived pre-auth token proving credentials were verified.
 
-        Sent via email when a backup code is used during login.
-        The user must click the link to approve account recovery.
+        Used to pass the verified user identity from the credentials step
+        to the TOTP verification step without re-sending credentials.
 
         Args:
             user_id: User UUID.
-            ttl_minutes: Token TTL in minutes (default 15min).
 
         Returns:
-            Signed JWT recovery approval token string.
+            Signed JWT pre-auth token string (2 min expiry).
         """
         now = datetime.now(UTC)
         payload = {
             "sub": str(user_id),
-            "exp": now + timedelta(minutes=ttl_minutes),
+            "exp": now + timedelta(minutes=2),
             "iat": now,
             "jti": str(uuid.uuid4()),
-            "type": "recovery_approval",
+            "type": "pre_auth",
         }
         headers = {"kid": self._current_key_id}
         return jwt.encode(
@@ -388,11 +385,11 @@ class JWTManager:
             headers=headers,
         )
 
-    def verify_recovery_approval_token(self, token: str) -> TokenPayload:
-        """Verify and decode a recovery approval token.
+    def verify_pre_auth_token(self, token: str) -> TokenPayload:
+        """Verify and decode a pre-auth token.
 
         Args:
-            token: JWT recovery approval token string.
+            token: JWT pre-auth token string.
 
         Returns:
             TokenPayload with decoded claims.
@@ -402,8 +399,8 @@ class JWTManager:
             InvalidTokenError: Token is malformed or wrong type.
         """
         payload = self._decode_token(token)
-        if payload.get("type") != "recovery_approval":
-            raise InvalidTokenError("Token is not a recovery approval token")
+        if payload.get("type") != "pre_auth":
+            raise InvalidTokenError("Token is not a pre-auth token")
         return TokenPayload(
             sub=payload["sub"],
             exp=payload["exp"],

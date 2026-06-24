@@ -9,7 +9,6 @@ from pydantic import BaseModel, EmailStr, Field
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    totp_token: str | None = Field(None, min_length=6, max_length=16)
 
 
 class TokenResponse(BaseModel):
@@ -113,29 +112,27 @@ class SetupRequiredResponse(BaseModel):
     status: str = "setup_required"
     setup_token: str
     expires_in: int = 900
+    recovery: bool = False
 
 
-class TOTPRequiredResponse(BaseModel):
-    status: str = "totp_required"
+class LoginSessionResponse(BaseModel):
+    status: str = "login_session"
+    session_token: str
+    expires_in: int = 120
+
+
+class LoginTOTPRequest(BaseModel):
+    session_token: str
+    totp_code: str = Field(..., min_length=6, max_length=6)
+
+
+class RecoveryBackupCodeRequest(BaseModel):
+    session_token: str
+    backup_code: str = Field(..., min_length=16, max_length=16)
 
 
 class SetupCompleteRequest(BaseModel):
     new_password: str | None = Field(None, min_length=8, max_length=128)
-
-
-class RecoveryRequiredResponse(BaseModel):
-    status: str = "recovery_email_sent"
-    message: str
-    expires_in: int = 900
-
-
-class RecoveryRequest(BaseModel):
-    email: str = Field(max_length=255)
-    password: str = Field(min_length=1, max_length=128)
-
-
-class RecoveryApproveRequest(BaseModel):
-    token: str
 
 
 class AdminResetUserAuthResponse(BaseModel):

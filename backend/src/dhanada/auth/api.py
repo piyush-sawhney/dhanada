@@ -37,7 +37,6 @@ from dhanada.auth.services.password_reset_service import (
     PasswordResetResult,
     PasswordResetService,
 )
-from dhanada.auth.services.recovery_service import RecoveryService
 from dhanada.auth.services.role_service import PermissionCheck, RoleService
 from dhanada.auth.services.token_service import TokenResult, TokenService
 from dhanada.auth.services.totp_service import TOTPEnrollmentResult, TOTPService
@@ -684,6 +683,135 @@ class AuthManager:
         """Generate a 15-minute setup token for first-time or reset login."""
         return self._jwt.create_setup_token(user_id)
 
+    def generate_session_token(self, user_id: uuid.UUID) -> str:
+        """Generate a 2-minute pre-auth token proving credentials are valid."""
+        return self._jwt.create_pre_auth_token(user_id)
+
+    def verify_session_token(self, token: str) -> uuid.UUID:
+        """Verify a pre-auth session token and return the user ID.
+
+        Args:
+            token: Pre-auth JWT token.
+
+        Returns:
+            User UUID extracted from the token.
+
+        Raises:
+            InvalidTokenError: Token invalid or expired.
+        """
+        payload = self._jwt.verify_pre_auth_token(token)
+        return uuid.UUID(payload.sub)
+
+    async def verify_login_totp(
+        self,
+        session_token: str,
+        totp_code: str,
+        user_agent: str | None = None,
+        ip_address: str | None = None,
+    ) -> TokenResult:
+        """Verify TOTP for login using a session token.
+
+        Args:
+            session_token: Pre-auth JWT from the credentials step.
+            totp_code: 6-digit TOTP code from authenticator app.
+            user_agent: Client user agent.
+            ip_address: Client IP address.
+
+        Returns:
+            TokenResult with access and refresh tokens.
+
+        Raises:
+            InvalidTokenError: Session token invalid or expired.
+            TOTPError: TOTP verification failed.
+        """
+        user_id = self.verify_session_token(session_token)
+
+        async with self._db.session() as session:
+            totp_repo = TOTPRepository(session)
+            user_repo = UserRepository(session)
+            token_repo = RefreshTokenRepository(session)
+            totp_service = TOTPService(totp_repo, user_repo, self._totp_manager)
+
+            if not await totp_service.verify_totp_only(user_id, totp_code):
+                raise TOTPInvalidTokenError("Invalid TOTP code")
+
+            await user_repo.update_last_login(user_id)
+            fresh_user = await user_repo.get(user_id)
+            if fresh_user is None:
+                raise UserNotFoundError(f"User {user_id} not found")
+
+            roles = [role.name for role in fresh_user.roles]
+            permissions: list[str] = []
+            for role in fresh_user.roles:
+                for perm in role.permissions:
+                    permissions.append(f"{perm.resource}:{perm.action}")
+
+            token_service = TokenService(token_repo, user_repo, self._jwt)
+            return await token_service.create_tokens(
+                user_id=user_id,
+                roles=roles,
+                permissions=permissions,
+                user_agent=user_agent,
+                ip_address=ip_address,
+            )
+
+    async def recover_with_backup_code(
+        self,
+        session_token: str,
+        backup_code: str,
+    ) -> tuple[str, bool]:
+        """Recover TOTP access using a backup code.
+
+        Verifies the backup code, deletes the old TOTP record
+        (which clears all remaining backup codes), deactivates the
+        user, and returns a setup token.
+
+        Args:
+            session_token: Pre-auth JWT from the credentials step.
+            backup_code: 16-character backup code.
+
+        Returns:
+            Tuple of (setup_token, recovery) where recovery is always True.
+
+        Raises:
+            InvalidTokenError: Session token invalid or expired.
+            TOTPInvalidTokenError: Backup code is invalid.
+            TOTPNotEnabledError: TOTP is not enabled.
+        """
+        user_id = self.verify_session_token(session_token)
+
+        async with self._db.session() as session:
+            totp_repo = TOTPRepository(session)
+            user_repo = UserRepository(session)
+            totp_service = TOTPService(totp_repo, user_repo, self._totp_manager)
+
+            totp = await totp_repo.get_by_user_id(user_id)
+            if totp is None or not totp.is_verified:
+                raise TOTPNotEnabledError(
+                    "TOTP is not enabled",
+                    hint="Enable TOTP in your security settings",
+                )
+
+            if not await totp_service._check_backup_code(backup_code, totp):
+                raise TOTPInvalidTokenError(
+                    "Invalid backup code",
+                    hint="Check your backup codes and try again",
+                )
+
+            # Delete TOTP secret (clears remaining backup codes too)
+            await totp_repo.delete_by_user_id(user_id)
+
+            # Deactivate user to force setup flow
+            now = datetime.now(UTC)
+            await user_repo.update(
+                user_id,
+                is_active=False,
+                expires_at=now + timedelta(minutes=10),
+            )
+
+        setup_token = self._jwt.create_setup_token(user_id)
+        return setup_token, True
+
     async def totp_is_enabled(self, user_id: uuid.UUID) -> bool:
         """Check if TOTP is enabled and verified for a user."""
         async with self._db.session() as session:
@@ -863,103 +991,6 @@ class AuthManager:
         async with self._db.session() as session:
             user_repo = UserRepository(session)
             return await user_repo.count() > 0
-
-    async def request_recovery(
-        self,
-        user: User,
-    ) -> bool:
-        """Send a recovery approval email when a backup code is used.
-
-        Args:
-            user: The user who entered a backup code.
-
-        Returns:
-            True if the email was sent.
-        """
-        if not user.is_superuser:
-            return False
-        if not user.email_verified:
-            return False
-        async with self._db.session() as session:
-            user_repo = UserRepository(session)
-            totp_repo = TOTPRepository(session)
-            service = RecoveryService(
-                jwt_manager=self._jwt,
-                user_repo=user_repo,
-                totp_repo=totp_repo,
-                email_sender=self._email_sender,
-                base_url=self._config.base_url,
-            )
-            return await service.request_recovery(user)
-
-    async def request_recovery_with_password(
-        self,
-        email: str,
-        password: str,
-    ) -> bool:
-        """Send a recovery approval email when the user has lost TOTP access.
-
-        Verifies credentials first, then sends the recovery email.
-        Used by the 'Lost authenticator?' flow on the TOTP step.
-
-        Args:
-            email: User's email.
-            password: User's password.
-
-        Returns:
-            True if the email was sent.
-
-        Raises:
-            AuthenticationError: Invalid credentials.
-            TOTPError: TOTP is not enabled.
-        """
-        user = await self.verify_credentials(email, password)
-        if not user.is_superuser:
-            raise AuthenticationError(
-                "Only superusers can self-recover. Contact a superuser to"
-                " reset your authentication.",
-            )
-        if not user.email_verified:
-            raise AuthenticationError(
-                "Email is not verified. Please verify your email address first."
-            )
-        if not user.is_active:
-            raise AuthenticationError(
-                "Account is not active",
-                hint="Contact an administrator to reactivate your account.",
-            )
-        if not await self.totp_is_enabled(user.id):
-            raise TOTPError(
-                "TOTP is not enabled for this account",
-                hint="You can log in without two-factor authentication.",
-            )
-        return await self.request_recovery(user)
-
-    async def approve_recovery(self, token: str) -> str:
-        """Approve recovery after email link click.
-
-        Deletes TOTP, deactivates user, and returns a setup token.
-
-        Args:
-            token: Recovery approval JWT from the email link.
-
-        Returns:
-            A setup token string.
-
-        Raises:
-            InvalidTokenError: Token is invalid or expired.
-        """
-        async with self._db.session() as session:
-            user_repo = UserRepository(session)
-            totp_repo = TOTPRepository(session)
-            service = RecoveryService(
-                jwt_manager=self._jwt,
-                user_repo=user_repo,
-                totp_repo=totp_repo,
-                email_sender=self._email_sender,
-                base_url=self._config.base_url,
-            )
-            return await service.approve_recovery(token)
 
     async def request_password_reset(self, email: str) -> bool:
         """Request a password reset email. Always returns True (prevents enumeration)."""

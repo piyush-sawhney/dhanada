@@ -1,7 +1,6 @@
 export interface LoginRequest {
   email: string
   password: string
-  totp_token?: string | null
 }
 
 export interface TokenResponse {
@@ -15,6 +14,13 @@ export interface SetupRequiredResponse {
   status: "setup_required"
   setup_token: string
   expires_in: number
+  recovery?: boolean
+}
+
+export interface LoginSessionResponse {
+  status: "login_session"
+  session_token: string
+  expires_in: number
 }
 
 export interface BootstrapRequest {
@@ -25,10 +31,6 @@ export interface BootstrapRequest {
 
 export interface BootstrapStatusResponse {
   needs_bootstrap: boolean
-}
-
-export interface TOTPRequiredResponse {
-  status: "totp_required"
 }
 
 export interface BootstrapCompleteResponse extends TokenResponse {
@@ -68,14 +70,8 @@ export interface AppResponse {
   name: string
 }
 
-export interface RecoveryRequiredResponse {
-  status: "recovery_email_sent"
-  message: string
-  expires_in: number
-}
-
 export interface ErrorResponse {
   detail: string
 }
 
-export type LoginResponse = TokenResponse | SetupRequiredResponse | TOTPRequiredResponse | RecoveryRequiredResponse
+export type LoginResponse = SetupRequiredResponse | LoginSessionResponse

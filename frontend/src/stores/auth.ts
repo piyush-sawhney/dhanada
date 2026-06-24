@@ -12,6 +12,8 @@ export const useAuthStore = defineStore("auth", () => {
   const userApps = shallowRef<AppResponse[]>([])
   const accessToken = shallowRef<string | null>(getAccessToken())
   const setupToken = shallowRef<string | null>(getSetupToken())
+  const sessionToken = shallowRef<string | null>(null)
+  const recoveryMode = shallowRef(false)
   const bootstrapChecked = ref(false)
 
   const isAuthenticated = computed(() => !!accessToken.value)
@@ -31,35 +33,47 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken.value = tokens.access_token
     setAccessToken(tokens.access_token)
     setRefreshToken(tokens.refresh_token)
-    setupToken.value = null
     clearSetupToken()
+    setupToken.value = null
+    sessionToken.value = null
+    recoveryMode.value = false
     bootstrapChecked.value = true
   }
 
-  async function login(email: string, password: string, totpToken?: string) {
-    const response = await authApi.login({ email, password, totp_token: totpToken })
+  async function login(email: string, password: string) {
+    const response = await authApi.login({ email, password })
 
     if ("setup_token" in response) {
       setupToken.value = response.setup_token
       setSetupToken(response.setup_token)
-      return { type: "setup_required" as const, token: response.setup_token }
+      recoveryMode.value = !!response.recovery
+      return { type: "setup_required" as const, recovery: !!response.recovery }
     }
 
-    if ("status" in response && response.status === "totp_required") {
-      return { type: "totp_required" as const }
-    }
-
-    if ("access_token" in response) {
-      setTokens(response)
-      await fetchUser()
-      return { type: "success" as const }
-    }
-
-    if ("status" in response && response.status === "recovery_email_sent") {
-      return { type: "recovery_email_sent" as const }
+    if ("session_token" in response) {
+      sessionToken.value = response.session_token
+      return { type: "session_issued" as const, sessionToken: response.session_token }
     }
 
     return { type: "error" as const }
+  }
+
+  async function loginTotp(totpCode: string) {
+    if (!sessionToken.value) throw new Error("No session token")
+    const tokens = await authApi.loginTotp(sessionToken.value, totpCode)
+    setTokens(tokens)
+    await fetchUser()
+    return { type: "success" as const }
+  }
+
+  async function recoverWithBackupCode(backupCode: string) {
+    if (!sessionToken.value) throw new Error("No session token")
+    const response = await authApi.recoverWithBackupCode(sessionToken.value, backupCode)
+    setupToken.value = response.setup_token
+    setSetupToken(response.setup_token)
+    recoveryMode.value = response.recovery
+    sessionToken.value = null
+    return { type: "setup_required" as const, recovery: response.recovery }
   }
 
   async function bootstrap(email: string, password: string, fullName?: string) {
@@ -68,7 +82,8 @@ export const useAuthStore = defineStore("auth", () => {
     if ("setup_token" in response) {
       setupToken.value = response.setup_token
       setSetupToken(response.setup_token)
-      return { type: "setup_required" as const, token: response.setup_token }
+      recoveryMode.value = false
+      return { type: "setup_required" as const }
     }
 
     if ("access_token" in response) {
@@ -85,6 +100,7 @@ export const useAuthStore = defineStore("auth", () => {
 
     const tokens = await authApi.setupComplete({ new_password: newPassword }, setupToken.value)
     setTokens(tokens)
+    recoveryMode.value = false
     await fetchUser()
   }
 
@@ -96,6 +112,8 @@ export const useAuthStore = defineStore("auth", () => {
       user.value = null
       accessToken.value = null
       clearTokens()
+      sessionToken.value = null
+      recoveryMode.value = false
       bootstrapChecked.value = false
     }
   }
@@ -110,21 +128,30 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
+  function clearSession() {
+    sessionToken.value = null
+  }
+
   return {
     user,
     userApps,
     accessToken,
     setupToken,
+    sessionToken,
+    recoveryMode,
     bootstrapChecked,
     isAuthenticated,
     isSetupRequired,
     fetchUser,
     fetchApps,
     login,
+    loginTotp,
+    recoverWithBackupCode,
     bootstrap,
     completeSetup,
     logout,
     checkAuth,
     setTokens,
+    clearSession,
   }
 })

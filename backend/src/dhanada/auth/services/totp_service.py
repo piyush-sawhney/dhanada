@@ -155,9 +155,12 @@ class TOTPService:
     async def verify(self, user_id: uuid.UUID, token: str) -> bool:
         """Verify a TOTP token for authentication.
 
+        Accepts both 6-digit TOTP codes and backup codes.
+        Backup codes are consumed upon use.
+
         Args:
             user_id: User UUID.
-            token: 6-digit TOTP code or backup code.
+            token: 6-digit TOTP code or 16-char backup code.
 
         Returns:
             True if token is valid.
@@ -171,6 +174,39 @@ class TOTPService:
 
         if await self._check_backup_code(token, totp):
             return True
+
+        return await self._verify_totp_code(token, totp)
+
+    async def verify_totp_only(self, user_id: uuid.UUID, token: str) -> bool:
+        """Verify only a 6-digit TOTP code for login.
+
+        Does NOT accept backup codes — they are only valid in the
+        recovery flow. This prevents accidental backup code consumption
+        during normal login.
+
+        Args:
+            user_id: User UUID.
+            token: 6-digit TOTP code.
+
+        Returns:
+            True if token is valid.
+
+        Raises:
+            TOTPNotEnabledError: TOTP is not enabled.
+            TOTPInvalidTokenError: Token is invalid.
+        """
+        totp = await self._totp_repo.get_by_user_id(user_id)
+        if totp is None or not totp.is_verified:
+            raise TOTPNotEnabledError(
+                "TOTP is not enabled",
+                hint="Enable TOTP in your security settings",
+            )
+
+        if len(token) == 16:
+            raise TOTPInvalidTokenError(
+                "Backup codes cannot be used for login. "
+                "Use 'Lost authenticator?' to recover with a backup code.",
+            )
 
         return await self._verify_totp_code(token, totp)
 

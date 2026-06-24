@@ -47,11 +47,11 @@ from dhanada.auth.fastapi.schemas import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     LoginRequest,
+    LoginSessionResponse,
+    LoginTOTPRequest,
     PermissionCheckResponse,
     ProfileUpdateRequest,
-    RecoveryApproveRequest,
-    RecoveryRequest,
-    RecoveryRequiredResponse,
+    RecoveryBackupCodeRequest,
     RefreshRequest,
     RegisterUserAppRequest,
     ResetPasswordRequest,
@@ -68,7 +68,6 @@ from dhanada.auth.fastapi.schemas import (
     TokenResponse,
     TOTPDisableRequest,
     TOTPEnableResponse,
-    TOTPRequiredResponse,
     TOTPVerifyRequest,
     UnregisterUserAppRequest,
     UserAppListResponse,
@@ -229,7 +228,7 @@ async def get_my_apps(
 
 @auth_router.post(
     "/login",
-    response_model=TokenResponse | SetupRequiredResponse | TOTPRequiredResponse,
+    response_model=LoginSessionResponse | SetupRequiredResponse,
     responses={
         401: {"model": ErrorResponse},
         429: {"detail": str, "locked_until": str},
@@ -240,19 +239,19 @@ async def login(
     body: LoginRequest,
     request: Request,
     auth: AuthManager = Depends(get_auth_manager),
-) -> TokenResponse | SetupRequiredResponse | RecoveryRequiredResponse | TOTPRequiredResponse:
-    """Login with email and password.
+) -> LoginSessionResponse | SetupRequiredResponse:
+    """Step 1: Verify credentials.
 
     Flow:
-    1. If user is inactive → returns a 15-minute setup token for TOTP enrollment + activation.
-    2. If user is active but TOTP not enabled → returns a setup token (bootstrap case).
-    3. If user is active with TOTP → requires valid TOTP code.
-       a. TOTP code (6 digits) → returns JWT tokens.
-       b. Backup code (16 chars) → sends recovery email, returns RecoveryRequiredResponse.
-       c. No TOTP code or invalid code → returns TOTPRequiredResponse.
+    1. Validates email + password.
+    2. If user is inactive or TOTP not enabled → returns a setup token.
+    3. If user is active with TOTP → returns a session token (2-min TTL)
+       for the TOTP verification step.
+
+    Does NOT accept TOTP codes or backup codes — those go to /login/totp
+    and /recovery/backup-code respectively.
     """
     try:
-        user_agent, ip_address = _get_client_info(request)
         user = await auth.verify_credentials(body.email, body.password)
 
         # Check if inactive account has expired
@@ -271,27 +270,9 @@ async def login(
             setup_token = auth.generate_setup_token(user.id)
             return SetupRequiredResponse(setup_token=setup_token)
 
-        # Normal login — TOTP or backup code
-        if body.totp_token is None or not await auth.verify_totp(user.id, body.totp_token):
-            return TOTPRequiredResponse()
+        session_token = auth.generate_session_token(user.id)
+        return LoginSessionResponse(session_token=session_token)
 
-        # Detect backup code usage (16 chars) vs TOTP code (6 digits)
-        if len(body.totp_token) == 16:
-            await auth.request_recovery(user)
-            return RecoveryRequiredResponse(
-                message=(
-                    "A recovery email has been sent to your email address. "
-                    "Please check your inbox and click the link to approve."
-                ),
-            )
-
-        tokens = await auth._create_tokens(user.id, user_agent, ip_address)
-        return TokenResponse(
-            access_token=tokens.access_token,
-            refresh_token=tokens.refresh_token,
-            token_type=tokens.token_type,
-            expires_in=tokens.expires_in,
-        )
     except AuthenticationError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
     except AccountLockedError as e:
@@ -307,59 +288,80 @@ async def login(
 
 
 @auth_router.post(
-    "/recovery/request",
-    response_model=RecoveryRequiredResponse,
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+    "/login/totp",
+    response_model=TokenResponse,
+    responses={
+        401: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
 )
-@limiter.limit("3/minute")
-async def recovery_request(
-    body: RecoveryRequest,
-    request: Request,  # noqa: ARG001
-    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
-) -> RecoveryRequiredResponse:
-    """Request account recovery when the user has lost TOTP access.
+@limiter.limit("5/minute")
+async def login_totp(
+    body: LoginTOTPRequest,
+    request: Request,
+    auth: AuthManager = Depends(get_auth_manager),
+) -> TokenResponse:
+    """Step 2: Verify TOTP code and complete login.
 
-    Called from the TOTP step of login when the user clicks
-    'Lost authenticator?'. Verifies email + password, sends
-    a recovery approval email, and returns a success response.
+    Requires a session_token from the credentials step and a 6-digit
+    TOTP code from the user's authenticator app.
+
+    Backup codes are NOT accepted here — use /recovery/backup-code instead.
     """
     try:
-        await auth.request_recovery_with_password(body.email, body.password)
-        return RecoveryRequiredResponse(
-            message=(
-                "A recovery email has been sent to your email address. "
-                "Please check your inbox and click the link to approve."
-            ),
+        user_agent, ip_address = _get_client_info(request)
+        tokens = await auth.verify_login_totp(
+            session_token=body.session_token,
+            totp_code=body.totp_code,
+            user_agent=user_agent,
+            ip_address=ip_address,
         )
-    except AuthenticationError as e:
+        return TokenResponse(
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token,
+            token_type=tokens.token_type,
+            expires_in=tokens.expires_in,
+        )
+    except (InvalidTokenError, TokenExpiredError) as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
     except TOTPError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
 
 
 @auth_router.post(
-    "/recovery/approve",
+    "/recovery/backup-code",
     response_model=SetupRequiredResponse,
-    responses={400: {"model": ErrorResponse}},
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+    },
 )
-@limiter.limit("5/minute")
-async def recovery_approve(
-    body: RecoveryApproveRequest,
+@limiter.limit("3/minute")
+async def recovery_backup_code(
+    body: RecoveryBackupCodeRequest,
     request: Request,  # noqa: ARG001
-    auth: AuthManager = Depends(get_auth_manager),  # noqa: B008
+    auth: AuthManager = Depends(get_auth_manager),
 ) -> SetupRequiredResponse:
-    """Approve account recovery after clicking the email link.
+    """Recover TOTP access using a backup code.
 
-    Called by the SPA when the user clicks the approval link.
-    Validates the recovery approval token, deletes TOTP, deactivates
-    the user, and returns a setup token so the user can enroll a new
-    authenticator and set a new password.
+    Requires a session_token from the credentials step and a valid
+    16-character backup code. On success, deletes the old TOTP
+    (invalidates remaining backup codes), deactivates the user, and
+    returns a setup token for enrolling a new authenticator.
     """
     try:
-        setup_token = await auth.approve_recovery(body.token)
-        return SetupRequiredResponse(setup_token=setup_token)
-    except InvalidTokenError as e:
+        setup_token, is_recovery = await auth.recover_with_backup_code(
+            session_token=body.session_token,
+            backup_code=body.backup_code,
+        )
+        return SetupRequiredResponse(setup_token=setup_token, recovery=is_recovery)
+    except (InvalidTokenError, TokenExpiredError) as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from None
+    except TOTPError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+
+
+
 
 
 @auth_router.post(

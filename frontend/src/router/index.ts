@@ -41,18 +41,7 @@ const router = createRouter({
       component: () => import("../views/ResetPasswordView.vue"),
       meta: { layout: AuthLayout, guest: true },
     },
-    {
-      path: "/recovery/email-sent",
-      name: "recovery-email-sent",
-      component: () => import("../views/RecoveryEmailSentView.vue"),
-      meta: { layout: AuthLayout, guest: true },
-    },
-    {
-      path: "/recovery/approve",
-      name: "recovery-approve",
-      component: () => import("../views/RecoveryApprovalView.vue"),
-      meta: { layout: AuthLayout, guest: true },
-    },
+
     {
       path: "/verify-email",
       name: "verify-email",
@@ -139,7 +128,7 @@ router.beforeEach(async (to, _from) => {
   }
 
   // Guest routes (login, forgot-password, reset-password, recovery)
-  if (to.name === "login" || to.name === "forgot-password" || to.name === "reset-password" || to.name === "recovery-email-sent" || to.name === "recovery-approve") {
+  if (to.name === "login" || to.name === "forgot-password" || to.name === "reset-password") {
     if (store.isAuthenticated) {
       return { name: "dashboard" }
     }
